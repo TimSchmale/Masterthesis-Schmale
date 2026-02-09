@@ -1,6 +1,7 @@
 import random
 import numpy as np
 import pandas as pd
+
 # ------------------------------------------------------------
 # Function to generate a random score (uniformly distributed) per column
 #
@@ -85,3 +86,46 @@ def get_combined_scores(X, y, k, p_leverage):
 
     return (1-p_leverage) * cls + p_leverage * ls
 
+# ------------------------------------------------------------
+# Function to perform a column reduction given score values for each column as calculation basis
+#
+# INPUT:
+#   X         : data matrix of dimension n x p
+#   scores    : scoring vector of length p
+#   k         : rank parameter (desired rank of approximation)
+#
+# OUTPUT:
+#   reduced data matrix as well as vector of selected variable indices
+# ------------------------------------------------------------
+
+def column_reduction(X, scores, k):
+    # get probabilities
+    probs = scores / np.sum(scores)
+
+    # get the number of desired columns
+    c = np.ceil(k * np.log(k))
+
+    # scale probs and set maximum to 1
+    scaled_probs = np.minimum(c * probs, 1)
+
+    # S matrix
+    S = np.zeros((X.shape[1], c))
+
+    # D matrix
+    D = np.zeros((c, c))
+
+    # sample the columns and fill S and D
+    sampled_cols = np.random.choice(X.shape[1], size = c, replace = False,p = scaled_probs)
+    for i in range(c):
+        S[sampled_cols[i+1], i+1] = 1
+        D[i+1, i+1] = 1 / min(1, np.sqrt(scaled_probs[sampled_cols[i+1]]))
+
+    # get C
+    X = np.array(X)
+    C = X @ S @ D
+
+    return {
+        "C": C,
+        "selected_columns": sampled_cols,
+        "probs": scaled_probs
+    }
