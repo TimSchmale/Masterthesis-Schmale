@@ -1,6 +1,8 @@
 import random
 import numpy as np
 import pandas as pd
+from numpy.ma.core import shape
+
 
 # ------------------------------------------------------------
 # Function to generate a random score (uniformly distributed) per column
@@ -152,6 +154,11 @@ def row_reduction(C, k):
     # get the number of desired columns
     c = np.ceil(k * np.log(k))
     r = np.ceil(c * np.log(c))
+
+    # build mechanism when r > row number
+    if np.shape(C)[0] > r:
+        print("No row reduction needed. Original Matrix C kept.")
+        return C
 
     # scale probs and set maximum to 1
     scaled_probs = np.minimum(r * probs, 1)
