@@ -28,7 +28,8 @@ def get_random_scores(X):
 def get_leverage_scores(X, k):
     # check n < p
     if X.shape[0] >= X.shape[1]:
-        raise ValueError("This function is designed for the case n < p.")
+        print("This function is designed for the case n < p. The matrix is now getting transposed.")
+        X = X.T
 
     # check k
     if k > X.shape[0]:
@@ -135,39 +136,44 @@ def column_reduction(X, scores, k):
 #
 # INPUT:
 #   C         : reduced data matrix of dimension n x c
-#   scores    : scoring vector of length n
+#   k         : rank parameter (desired rank of approximation)
 #
 # OUTPUT:
 #   reduced data matrix as well as vector of selected variable indices
 # ------------------------------------------------------------
-def row_reduction(X, scores, k):
+def row_reduction(C, k):
+    print("calculation of leverage scores...")
+    # get the leverage scores for the rows
+    scores = get_cross_leverage_scores(C, k)
+    print(np.shape(scores))
     # get probabilities
     probs = scores / np.sum(scores)
 
     # get the number of desired columns
     c = np.ceil(k * np.log(k))
+    r = np.ceil(c * np.log(c))
 
     # scale probs and set maximum to 1
-    scaled_probs = np.minimum(c * probs, 1)
+    scaled_probs = np.minimum(r * probs, 1)
 
     # S matrix
-    S = np.zeros((X.shape[1], c))
+    S = np.zeros((r, C.shape[0]))
 
     # D matrix
-    D = np.zeros((c, c))
+    D = np.zeros((r, r))
 
     # sample the columns and fill S and D
-    sampled_cols = np.random.choice(X.shape[1], size = c, replace = False,p = scaled_probs)
-    for i in range(c):
-        S[sampled_cols[i+1], i+1] = 1
-        D[i+1, i+1] = 1 / min(1, np.sqrt(scaled_probs[sampled_cols[i+1]]))
+    sampled_rows = np.random.choice(C.shape[0], size = c, replace = False,p = scaled_probs)
+    for i in range(r):
+        S[i+1,sampled_rows[i+1]] = 1
+        D[i+1, i+1] = 1 / min(1, np.sqrt(scaled_probs[sampled_rows[i+1]]))
 
     # get C
-    X = np.array(X)
-    C = X @ S @ D
+    C = np.array(C)
+    R = D @ S @ C
 
     return {
-        "C": C,
-        "selected_columns": sampled_cols,
+        "R": R,
+        "selected_rows": sampled_rows,
         "probs": scaled_probs
     }
