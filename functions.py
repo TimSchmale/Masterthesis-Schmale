@@ -35,6 +35,7 @@ def get_leverage_scores(X, k):
 
     # check k
     if k > X.shape[0]:
+        print(k, X.shape[0])
         raise ValueError("k must be <= nrow(X)")
 
     # perform singular value decomposition to get V matrix
@@ -102,26 +103,39 @@ def get_combined_scores(X, y, k, p_leverage):
 #   reduced data matrix as well as vector of selected variable indices
 # ------------------------------------------------------------
 def column_reduction(X, scores, k):
+    # get dimensions
+    n, p = np.shape(X)
     # get probabilities
     probs = scores / np.sum(scores)
 
     # get the number of desired columns
-    c = np.ceil(k * np.log(k))
+    c = int(np.ceil(k * np.log(k)))
 
     # scale probs and set maximum to 1
     scaled_probs = np.minimum(c * probs, 1)
 
-    # S matrix
-    S = np.zeros((X.shape[1], c))
-
-    # D matrix
-    D = np.zeros((c, c))
-
     # sample the columns and fill S and D
-    sampled_cols = np.random.choice(X.shape[1], size = c, replace = False,p = scaled_probs)
-    for i in range(c):
-        S[sampled_cols[i+1], i+1] = 1
-        D[i+1, i+1] = 1 / min(1, np.sqrt(scaled_probs[sampled_cols[i+1]]))
+    t = 0
+    sampled_cols = []
+    S_cols = []
+    D_diag = []
+
+    for j in range(p):
+        z = np.random.uniform(0, 1)
+        if z <= scaled_probs[j]:
+            sampled_cols.append(j)
+            S_cols.append(j)
+            D_diag.append(1 / np.sqrt(scaled_probs[j]))
+            t += 1
+
+    # create S and D
+    t = len(sampled_cols)
+    S = np.zeros((p, t))
+    D = np.zeros((t, t))
+
+    for idx, j in enumerate(sampled_cols):
+        S[j, idx] = 1
+        D[idx, idx] = D_diag[idx]
 
     # get C
     X = np.array(X)
@@ -144,36 +158,50 @@ def column_reduction(X, scores, k):
 #   reduced data matrix as well as vector of selected variable indices
 # ------------------------------------------------------------
 def row_reduction(C, k):
-    print("calculation of leverage scores...")
+    # get dimensions
+    n, c = np.shape(C)
     # get the leverage scores for the rows
-    scores = get_cross_leverage_scores(C, k)
-    print(np.shape(scores))
+    scores = get_leverage_scores(C, k)
     # get probabilities
     probs = scores / np.sum(scores)
 
     # get the number of desired columns
-    c = np.ceil(k * np.log(k))
-    r = np.ceil(c * np.log(c))
-
-    # build mechanism when r > row number
-    if np.shape(C)[0] > r:
-        print("No row reduction needed. Original Matrix C kept.")
-        return C
+    r = int(np.ceil(c * np.log(c)))
 
     # scale probs and set maximum to 1
     scaled_probs = np.minimum(r * probs, 1)
 
-    # S matrix
-    S = np.zeros((r, C.shape[0]))
+    # build mechanism when r > row number
+    if n < r:
+        print("No row reduction needed. Original Matrix C kept.")
+        return {
+            "R": C,
+            "selected_rows": list(range(n)),
+            "probs": scaled_probs
+        }
 
-    # D matrix
-    D = np.zeros((r, r))
+    # sample the rows and fill S and D
+    t = 0
+    sampled_rows = []
+    S_rows = []
+    D_diag = []
 
-    # sample the columns and fill S and D
-    sampled_rows = np.random.choice(C.shape[0], size = c, replace = False,p = scaled_probs)
-    for i in range(r):
-        S[i+1,sampled_rows[i+1]] = 1
-        D[i+1, i+1] = 1 / min(1, np.sqrt(scaled_probs[sampled_rows[i+1]]))
+    for j in range(n):
+        z = np.random.uniform(0, 1)
+        if z <= scaled_probs[j]:
+            sampled_rows.append(j)
+            S_rows.append(j)
+            D_diag.append(1 / np.sqrt(scaled_probs[j]))
+            t += 1
+
+    # create S and D
+    t = len(sampled_rows)
+    S = np.zeros((t, n))
+    D = np.zeros((t, t))
+
+    for idx, j in enumerate(sampled_rows):
+        S[idx, j] = 1
+        D[idx, idx] = D_diag[idx]
 
     # get C
     C = np.array(C)
