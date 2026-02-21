@@ -1,8 +1,6 @@
 import random
 import numpy as np
 import pandas as pd
-from numpy.ma.core import shape
-
 
 # ------------------------------------------------------------
 # Function to generate a random score (uniformly distributed) per column
@@ -41,7 +39,7 @@ def get_leverage_scores(X, k):
     # perform singular value decomposition to get V matrix
     U, S, Vh = np.linalg.svd(X)
 
-    return np.sum(Vh.T[:,0:k] ** 2, axis = 1)
+    return np.sum(Vh.T[:,0:k-1] ** 2, axis = 1)
 
 # ------------------------------------------------------------
 # Function to compute Column Cross Leverage Scores (CLS) for the case n<p
