@@ -41,7 +41,7 @@ def get_leverage_scores(X, k):
     # perform singular value decomposition to get V matrix
     U, S, Vh = np.linalg.svd(X)
 
-    return np.sum(Vh.T[:,1:k] ** 2, axis = 1)
+    return np.sum(Vh.T[:,0:k] ** 2, axis = 1)
 
 # ------------------------------------------------------------
 # Function to compute Column Cross Leverage Scores (CLS) for the case n<p
@@ -174,7 +174,7 @@ def row_reduction(C, y, k):
 
     # build mechanism when r > row number
     if n < r:
-        #print("No row reduction needed. Original Matrix C kept.")
+        print("No row reduction needed. Original Matrix C kept.")
         return {
             "R": C,
             "y": y,
@@ -210,7 +210,11 @@ def row_reduction(C, y, k):
     R = D @ S @ C
 
     # get the reduced y
-    y_reduced = y[sampled_rows]
+    print(np.shape(y))
+    print(np.shape(sampled_rows))
+    print(type(y))
+    print(type(sampled_rows))
+    y_reduced = y.iloc[sampled_rows]
     return {
         "R": R,
         "y": y_reduced,
