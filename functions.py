@@ -152,12 +152,13 @@ def column_reduction(X, scores, k):
 #
 # INPUT:
 #   C         : reduced data matrix of dimension n x c
+#   y         : response vector of length n
 #   k         : rank parameter (desired rank of approximation)
 #
 # OUTPUT:
 #   reduced data matrix as well as vector of selected variable indices
 # ------------------------------------------------------------
-def row_reduction(C, k):
+def row_reduction(C, y, k):
     # get dimensions
     n, c = np.shape(C)
     # get the leverage scores for the rows
@@ -173,9 +174,10 @@ def row_reduction(C, k):
 
     # build mechanism when r > row number
     if n < r:
-        print("No row reduction needed. Original Matrix C kept.")
+        #print("No row reduction needed. Original Matrix C kept.")
         return {
             "R": C,
+            "y": y,
             "selected_rows": list(range(n)),
             "probs": scaled_probs
         }
@@ -207,8 +209,11 @@ def row_reduction(C, k):
     C = np.array(C)
     R = D @ S @ C
 
+    # get the reduced y
+    y_reduced = y[sampled_rows]
     return {
         "R": R,
+        "y": y_reduced,
         "selected_rows": sampled_rows,
         "probs": scaled_probs
     }
