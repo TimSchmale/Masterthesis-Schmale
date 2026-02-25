@@ -28,7 +28,7 @@ def get_random_scores(X):
 def get_leverage_scores(X, k):
     # check n < p
     if X.shape[0] >= X.shape[1]:
-        print("This function is designed for the case n < p. The matrix is now getting transposed.")
+        #print("This function is designed for the case n < p. The matrix is now getting transposed.")
         X = X.T
 
     # check k
@@ -172,7 +172,7 @@ def row_reduction(C, y, k):
 
     # build mechanism when r > row number
     if n < r:
-        print("No row reduction needed. Original Matrix C kept.")
+        #print("No row reduction needed. Original Matrix C kept.")
         return {
             "R": C,
             "y": y,
