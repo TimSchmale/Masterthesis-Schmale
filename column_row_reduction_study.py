@@ -12,7 +12,7 @@ from IPython.display import display
 # data_reduction: Function for data reduction of Simulation Study
 # ==============================================================================================
 
-def data_reduction(k, df_train, y_train):
+def data_reduction(k, df_train, y_train, row_reduction = True):
     """
     Perform data reduction on simulated datasets using multiple scoring methods.
 
@@ -394,7 +394,7 @@ def plot_rmse_comparison(rmse_dict):
     return rmse_df, p_line, p_box
 
 
-def compare_methods(k, seed, base, folder, reps):
+def compare_methods(k, seed, base, folder, reps, row_reduction = True):
     """
     Conduct a full simulation study: data load, reduction, modeling, and RMSE evaluation.
 
@@ -467,7 +467,7 @@ def compare_methods(k, seed, base, folder, reps):
 
     print("Performing data reduction...")
     ## 3. Data Reduction
-    scores, C, R = data_reduction(k, df_train, y_train)
+    scores, C, R = data_reduction(k, df_train, y_train, row_reduction)
 
     print("Visualizing score distributions...")
     ## 4. Score Distributions Visualization
