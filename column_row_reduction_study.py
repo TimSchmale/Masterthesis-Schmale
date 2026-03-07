@@ -12,7 +12,7 @@ from IPython.display import display
 # data_reduction: Function for data reduction of Simulation Study
 # ==============================================================================================
 
-def data_reduction(k, df_train, y_train, row_reduction = True):
+def data_reduction(k, df_train, y_train, row_reduce = True):
     """
     Perform data reduction on simulated datasets using multiple scoring methods.
 
@@ -93,19 +93,22 @@ def data_reduction(k, df_train, y_train, row_reduction = True):
 
     C = {"C_ls": C_ls, "C_cls": C_cls, "C_rs": C_rs, "C_cs": C_cs}
 
-    # 3. Calculation of row reduction
-    R_ls = []
-    R_cls = []
-    R_rs = []
-    R_cs = []
+    if row_reduce:
+        # 3. Calculation of row reduction
+        R_ls = []
+        R_cls = []
+        R_rs = []
+        R_cs = []
 
-    for i in range(len(df_train)):
-        R_ls.append(row_reduction(C_ls[i]['C'], y_train[i], k))
-        R_cls.append(row_reduction(C_cls[i]['C'], y_train[i], k))
-        R_rs.append(row_reduction(C_rs[i]['C'], y_train[i], k))
-        R_cs.append(row_reduction(C_cs[i]['C'], y_train[i], k))
+        for i in range(len(df_train)):
+            R_ls.append(row_reduction(C_ls[i]['C'], y_train[i], k))
+            R_cls.append(row_reduction(C_cls[i]['C'], y_train[i], k))
+            R_rs.append(row_reduction(C_rs[i]['C'], y_train[i], k))
+            R_cs.append(row_reduction(C_cs[i]['C'], y_train[i], k))
 
-    R = {"R_ls": R_ls, "R_cls": R_cls, "R_rs": R_rs, "R_cs": R_cs}
+        R = {"R_ls": R_ls, "R_cls": R_cls, "R_rs": R_rs, "R_cs": R_cs}
+    else:
+        R = None
 
     return scores, C, R
 
@@ -174,7 +177,7 @@ def visualize_distributions(scores):
 # linear_modeling: Function for application of linear model to reduced data sets, and RMSE calculations
 # ==============================================================================================
 
-def linear_modeling(C, R, df_test, y_test):
+def linear_modeling(C, R, df_test, y_test, y_train):
     """
     Apply linear regression to reduced datasets and compute RMSE per replication and method.
 
@@ -222,19 +225,40 @@ def linear_modeling(C, R, df_test, y_test):
     model_cls = []
     model_rs = []
     model_cs = []
-    for i in range(len(R['R_ls'])):
-        model = LinearRegression()
-        model.fit(R['R_ls'][i]['R'], R['R_ls'][i]['y'])
-        model_ls.append(model)
-        model = LinearRegression()
-        model.fit(R['R_cls'][i]['R'], R['R_cls'][i]['y'])
-        model_cls.append(model)
-        model = LinearRegression()
-        model.fit(R['R_rs'][i]['R'], R['R_rs'][i]['y'])
-        model_rs.append(model)
-        model = LinearRegression()
-        model.fit(R['R_cs'][i]['R'], R['R_cs'][i]['y'])
-        model_cs.append(model)
+
+    if R is not None:
+        n_reps = len(R['R_ls'])
+    else:
+        n_reps = len(C['C_ls'])
+
+    for i in range(n_reps):
+        if R is not None:
+            model = LinearRegression()
+            model.fit(R['R_ls'][i]['R'], R['R_ls'][i]['y'])
+            model_ls.append(model)
+            model = LinearRegression()
+            model.fit(R['R_cls'][i]['R'], R['R_cls'][i]['y'])
+            model_cls.append(model)
+            model = LinearRegression()
+            model.fit(R['R_rs'][i]['R'], R['R_rs'][i]['y'])
+            model_rs.append(model)
+            model = LinearRegression()
+            model.fit(R['R_cs'][i]['R'], R['R_cs'][i]['y'])
+            model_cs.append(model)
+        else:
+            model = LinearRegression()
+            model.fit(C['C_ls'][i]['C'], y_train[i])
+            model_ls.append(model)
+            model = LinearRegression()
+            model.fit(C['C_cls'][i]['C'], y_train[i])
+            model_cls.append(model)
+            model = LinearRegression()
+            model.fit(C['C_rs'][i]['C'], y_train[i])
+            model_rs.append(model)
+            model = LinearRegression()
+            model.fit(C['C_cs'][i]['C'], y_train[i])
+            model_cs.append(model)
+
 
     # Build predictions
     predictions_ls = []
@@ -246,7 +270,7 @@ def linear_modeling(C, R, df_test, y_test):
     df_test_reduced_rs = []
     df_test_reduced_cs = []
 
-    for i in range(len(R['R_ls'])):
+    for i in range(n_reps):
         df_test_reduced_ls.append(df_test[i].iloc[:, C['C_ls'][i]['selected_columns']])
         predictions_ls.append(model_ls[i].predict(df_test_reduced_ls[i]))
         df_test_reduced_cls.append(df_test[i].iloc[:, C['C_cls'][i]['selected_columns']])
@@ -261,12 +285,12 @@ def linear_modeling(C, R, df_test, y_test):
     rmse_cls = []
     rmse_rs = []
     rmse_cs = []
-    for i in range(len(R['R_ls'])):
+    for i in range(n_reps):
         rmse_ls.append(np.sqrt(mean_squared_error(y_test[i], predictions_ls[i])))
         rmse_cls.append(np.sqrt(mean_squared_error(y_test[i], predictions_cls[i])))
         rmse_rs.append(np.sqrt(mean_squared_error(y_test[i], predictions_rs[i])))
         rmse_cs.append(np.sqrt(mean_squared_error(y_test[i], predictions_cs[i])))
-    rmse = {"rmse_ls": rmse_ls, "rmse_cls": rmse_cls, "rmse_rs": rmse_rs, "rmse_cs": rmse_cs, }
+    rmse = {"LS": rmse_ls, "CLS": rmse_cls, "RS": rmse_rs, "CS": rmse_cs, }
 
     return rmse
 
@@ -475,12 +499,12 @@ def compare_methods(k, seed, base, folder, reps, row_reduction = True):
 
     print("Building linear models...")
     ## 5. Linear Modeling
-    rmse = linear_modeling(C, R, df_test, y_test)
+    rmse = linear_modeling(C, R, df_test, y_test, y_train)
 
     print("Building Full Model / Benchmark...")
     ## 6. Full Model
     rmse_full = compute_full_rmse(df_train, df_test, y_train, y_test, base, folder)
-    rmse["rmse_full"] = rmse_full
+    rmse["Full"] = rmse_full
 
     print("Plotting RMSE...")
     ## 7. RMSE Plotting
