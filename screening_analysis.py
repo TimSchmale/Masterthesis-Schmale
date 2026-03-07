@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 from IPython.display import display
-from plotnine import ggplot, aes, geom_histogram, theme_bw, labs, geom_line, theme_minimal, geom_boxplot, facet_wrap
+from plotnine import ggplot, aes, geom_histogram, theme_bw, labs, geom_bar, theme_minimal, geom_boxplot, facet_wrap
 
 def evaluate_screening_performance(base, folder, C, reps):
     # determine the beta hit lists
@@ -9,6 +9,10 @@ def evaluate_screening_performance(base, folder, C, reps):
 
     # visualize the percentages of betas hit by method
     visualize_hit_percentages(beta_nonzero, cls_hits, ls_hits, rs_hits, cs_hits, reps)
+
+    beta_sum, cls_sum, ls_sum, rs_sum, cs_sum = get_beta_share(beta, C)
+
+    visualize_beta_share(beta_sum, cls_sum, ls_sum, rs_sum, cs_sum)
 
 def get_beta_hits(base, folder, C, reps):
 
@@ -72,6 +76,62 @@ def visualize_hit_percentages(beta_nonzero, cls_hits, ls_hits, rs_hits, cs_hits,
     # Boxplot
     p_box = (
             ggplot(hits_long, aes(x="Method", y="Hit Percentage", fill="Method"))
+            + geom_boxplot()
+            + theme_minimal()
+            + labs(
+        title="Hit Percentage per Method",
+        x="Method",
+        y="Hit Percentage"
+    )
+    )
+
+    # print plot
+    display(p_box)
+
+def get_beta_share(beta, C):
+    reps = np.shape(beta)[0]
+
+    beta_sum = []
+    cls_sum = []
+    ls_sum = []
+    rs_sum = []
+    cs_sum = []
+    for i in range(reps):
+        beta_sum.append(np.sum(np.abs(beta[i])))
+
+        cls_cols = C['C_cls'][i]['selected_columns']
+        ls_cols = C['C_ls'][i]['selected_columns']
+        rs_cols = C['C_rs'][i]['selected_columns']
+        cs_cols = C['C_cs'][i]['selected_columns']
+
+        cls_sum.append(np.sum(np.abs(beta[i][cls_cols])))
+        ls_sum.append(np.sum(np.abs(beta[i][ls_cols])))
+        rs_sum.append(np.sum(np.abs(beta[i][rs_cols])))
+        cs_sum.append(np.sum(np.abs(beta[i][cs_cols])))
+
+    return beta_sum, cls_sum, ls_sum, rs_sum, cs_sum
+
+def visualize_beta_share(beta_sum, cls_sum, ls_sum, rs_sum, cs_sum):
+
+    reps = np.shape(beta_sum)[0]
+
+    shares = {"Beta": beta_sum, "CLS": cls_sum, "LS": ls_sum, "RS": rs_sum, "CS": cs_sum}
+
+    # Create DataFrame
+    n_reps = len(next(iter(shares.values())))
+    shares_df = pd.DataFrame(shares)
+    shares_df["Replication"] = np.arange(1, n_reps + 1)
+
+    # Melt into long format
+    hits_long = shares_df.melt(
+        id_vars="Replication",
+        var_name="Method",
+        value_name="Share"
+    )
+
+    # Boxplot
+    p_box = (
+            ggplot(hits_long, aes(x="Method", y="Share", fill="Method"))
             + geom_boxplot()
             + theme_minimal()
             + labs(
