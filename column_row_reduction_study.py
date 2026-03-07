@@ -7,6 +7,7 @@ from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error
 from plotnine import ggplot, aes, geom_histogram, theme_bw, labs, geom_line, theme_minimal, geom_boxplot, facet_wrap
 from IPython.display import display
+import time
 
 # ==============================================================================================
 # data_reduction: Function for data reduction of Simulation Study
@@ -65,19 +66,45 @@ def data_reduction(k, df_train, y_train, row_reduce = True):
     - The row and column reduction functions should return dictionaries containing
       the reduced matrices and any metadata needed for downstream modeling.
     """
-
     # 1. Perform the score calculations
     column_ls = []
     column_cls = []
     column_rs = []
     column_cs = []
-    for i in range(len(df_train)):
-        column_ls.append(get_leverage_scores(df_train[i], k))
-        column_cls.append(get_cross_leverage_scores(df_train[i], y_train[i]))
-        column_rs.append(get_random_scores(df_train[i]))
-        column_cs.append(get_combined_scores(df_train[i], y_train[i], k, p_leverage=0.2))
 
-    scores = {"LS": column_ls, "CLS": column_cls, "RS": column_rs, "CS": column_cs}
+    time_ls = []
+    time_cls = []
+    time_rs = []
+    time_cs = []
+    for i in range(len(df_train)):
+        start = time.perf_counter()
+        column_ls.append(get_leverage_scores(df_train[i], k))
+        time_ls.append(time.perf_counter() - start)
+
+        start = time.perf_counter()
+        column_cls.append(get_cross_leverage_scores(df_train[i], y_train[i]))
+        time_cls.append(time.perf_counter() - start)
+
+        start = time.perf_counter()
+        column_rs.append(get_random_scores(df_train[i]))
+        time_rs.append(time.perf_counter() - start)
+
+        start = time.perf_counter()
+        column_cs.append(get_combined_scores(df_train[i], y_train[i], k, p_leverage=0.2))
+        time_cs.append(time.perf_counter() - start)
+
+    timing_scores = {
+        "LS": time_ls,
+        "CLS": time_cls,
+        "RS": time_rs,
+        "CS": time_cs
+    }
+    scores = {
+        "LS": column_ls,
+        "CLS": column_cls,
+        "RS": column_rs,
+        "CS": column_cs
+    }
 
     # 2. Calculation of column reduction
     C_ls = []
@@ -91,7 +118,12 @@ def data_reduction(k, df_train, y_train, row_reduce = True):
         C_rs.append(column_reduction(df_train[i], column_rs[i], k))
         C_cs.append(column_reduction(df_train[i], column_cs[i], k))
 
-    C = {"C_ls": C_ls, "C_cls": C_cls, "C_rs": C_rs, "C_cs": C_cs}
+    C = {
+        "C_ls": C_ls,
+        "C_cls": C_cls,
+        "C_rs": C_rs,
+        "C_cs": C_cs
+    }
 
     if row_reduce:
         # 3. Calculation of row reduction
@@ -106,11 +138,16 @@ def data_reduction(k, df_train, y_train, row_reduce = True):
             R_rs.append(row_reduction(C_rs[i]['C'], y_train[i], k))
             R_cs.append(row_reduction(C_cs[i]['C'], y_train[i], k))
 
-        R = {"R_ls": R_ls, "R_cls": R_cls, "R_rs": R_rs, "R_cs": R_cs}
+        R = {
+            "R_ls": R_ls,
+            "R_cls": R_cls,
+            "R_rs": R_rs,
+            "R_cs": R_cs
+        }
     else:
         R = None
 
-    return scores, C, R
+    return scores, timing_scores, C, R
 
 
 # ==============================================================================================
@@ -417,6 +454,68 @@ def plot_rmse_comparison(rmse_dict):
 
     return rmse_df, p_line, p_box
 
+# ==============================================================================================
+# Function to plot RMSE comparison (line + boxplot)
+# ==============================================================================================
+def plot_time_comparison(time_dict):
+    """
+    Create line plot and boxplot of Time per method across replications.
+
+    Parameters
+    ----------
+    time_dict : dict
+        Keys = method names (str), values = list of Time per replication
+
+    Returns
+    -------
+    time_df : pd.DataFrame
+        Long-format DataFrame used for plotting
+    p_line : plotnine.ggplot
+        Line plot of Time across replications
+    p_box : plotnine.ggplot
+        Boxplot of Time distribution per method
+    """
+    # Create DataFrame
+    n_reps = len(next(iter(time_dict.values())))
+    time_df = pd.DataFrame(time_dict)
+    time_df["Replication"] = np.arange(1, n_reps + 1)
+
+    # Melt into long format
+    time_long = time_df.melt(
+        id_vars="Replication",
+        var_name="Method",
+        value_name="Score Calculation Time"
+    )
+
+    # Line plot
+    p_line = (
+            ggplot(time_long, aes(x="Replication", y="Time", color="Method"))
+            + geom_line(size=1.2)
+            + theme_minimal()
+            + labs(
+        title="Score Calculation Time Comparison Across Methods",
+        x="Replication",
+        y="Score Calculation Time"
+    )
+    )
+
+    # Boxplot
+    p_box = (
+            ggplot(time_long, aes(x="Method", y="Time", fill="Method"))
+            + geom_boxplot()
+            + theme_minimal()
+            + labs(
+        title="Score Calculation Time Distribution per Method",
+        x="Method",
+        y="Score Calculation Time"
+    )
+    )
+
+    # Display plots
+    # display(p_line)
+    display(p_box)
+
+    return time_df, p_line, p_box
 
 def compare_methods(k, seed, base, folder, reps, row_reduction = True):
     """
@@ -491,7 +590,7 @@ def compare_methods(k, seed, base, folder, reps, row_reduction = True):
 
     print("Performing data reduction...")
     ## 3. Data Reduction
-    scores, C, R = data_reduction(k, df_train, y_train, row_reduction)
+    scores, time_scores, C, R = data_reduction(k, df_train, y_train, row_reduction)
 
     print("Visualizing score distributions...")
     ## 4. Score Distributions Visualization
@@ -510,4 +609,8 @@ def compare_methods(k, seed, base, folder, reps, row_reduction = True):
     ## 7. RMSE Plotting
     plot_rmse_comparison(rmse)
 
-    return scores, C, R, rmse
+    print("Plotting Time...")
+    ## 8. Time Plotting
+    plot_rmse_comparison(rmse)
+
+    return scores, time_scores, C, R, rmse
