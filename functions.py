@@ -207,10 +207,6 @@ def row_reduction(C, y, k):
     R = D @ S @ C
 
     # get the reduced y
-    print(np.shape(y))
-    print(np.shape(sampled_rows))
-    print(type(y))
-    print(type(sampled_rows))
     y_reduced = y.iloc[sampled_rows]
     return {
         "R": R,
