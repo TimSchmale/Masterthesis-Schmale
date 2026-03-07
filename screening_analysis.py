@@ -10,9 +10,9 @@ def evaluate_screening_performance(base, folder, C, reps):
     # visualize the percentages of betas hit by method
     visualize_hit_percentages(beta_nonzero, cls_hits, ls_hits, rs_hits, cs_hits, reps)
 
-    beta_sum, cls_sum, ls_sum, rs_sum, cs_sum = get_beta_share(beta, C)
+    cls_share, ls_share, rs_share, cs_share = get_beta_share(beta, C)
 
-    visualize_beta_share(beta_sum, cls_sum, ls_sum, rs_sum, cs_sum)
+    visualize_beta_share(cls_share, ls_share, rs_share, cs_share)
 
 def get_beta_hits(base, folder, C, reps):
 
@@ -91,31 +91,36 @@ def visualize_hit_percentages(beta_nonzero, cls_hits, ls_hits, rs_hits, cs_hits,
 def get_beta_share(beta, C):
     reps = np.shape(beta)[0]
 
-    beta_sum = []
-    cls_sum = []
-    ls_sum = []
-    rs_sum = []
-    cs_sum = []
+    cls_share = []
+    ls_share = []
+    rs_share = []
+    cs_share = []
+
     for i in range(reps):
-        beta_sum.append(np.sum(np.abs(beta[i])))
+        beta_total = np.sum(np.abs(beta[i]))
 
         cls_cols = C['C_cls'][i]['selected_columns']
         ls_cols = C['C_ls'][i]['selected_columns']
         rs_cols = C['C_rs'][i]['selected_columns']
         cs_cols = C['C_cs'][i]['selected_columns']
 
-        cls_sum.append(np.sum(np.abs(beta[i][cls_cols])))
-        ls_sum.append(np.sum(np.abs(beta[i][ls_cols])))
-        rs_sum.append(np.sum(np.abs(beta[i][rs_cols])))
-        cs_sum.append(np.sum(np.abs(beta[i][cs_cols])))
+        cls = np.sum(np.abs(beta[i][cls_cols]))
+        ls = np.sum(np.abs(beta[i][ls_cols]))
+        rs = np.sum(np.abs(beta[i][rs_cols]))
+        cs = np.sum(np.abs(beta[i][cs_cols]))
 
-    return beta_sum, cls_sum, ls_sum, rs_sum, cs_sum
+        cls_share.append(cls / beta_total * 100)
+        ls_share.append(ls / beta_total * 100)
+        rs_share.append(rs / beta_total * 100)
+        cs_share.append(cs / beta_total * 100)
 
-def visualize_beta_share(beta_sum, cls_sum, ls_sum, rs_sum, cs_sum):
+    return cls_share, ls_share, rs_share, cs_share
 
-    reps = np.shape(beta_sum)[0]
+def visualize_beta_share(cls_share, ls_share, rs_share, cs_share):
 
-    shares = {"Beta": beta_sum, "CLS": cls_sum, "LS": ls_sum, "RS": rs_sum, "CS": cs_sum}
+    reps = np.shape(cls_share)[0]
+
+    shares = {"CLS": cls_share, "LS": ls_share, "RS": rs_share, "CS": cs_share}
 
     # Create DataFrame
     n_reps = len(next(iter(shares.values())))
