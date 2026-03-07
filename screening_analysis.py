@@ -135,9 +135,9 @@ def visualize_beta_share(beta_sum, cls_sum, ls_sum, rs_sum, cs_sum):
             + geom_boxplot()
             + theme_minimal()
             + labs(
-        title="Hit Percentage per Method",
+        title="Beta Share per Method",
         x="Method",
-        y="Hit Percentage"
+        y="Beta Share"
     )
     )
 
