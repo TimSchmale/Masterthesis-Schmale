@@ -547,6 +547,6 @@ def compare_methods(k, seed, base, folder, reps, row_reduction = True):
 
     print("Plotting Time...")
     ## 8. Time Plotting
-    plot_time_comparison(rmse)
+    plot_time_comparison(time_scores)
 
     return scores, time_scores, C, R, rmse
