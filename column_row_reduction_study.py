@@ -1,6 +1,6 @@
 import pandas as pd
 import random
-from scoring_functions import get_leverage_scores, get_cross_leverage_scores, get_random_scores, get_combined_scores
+from scoring_functions import *
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error
 import time
@@ -77,7 +77,7 @@ def row_reduction(C, y, k):
     # get dimensions
     n, c = np.shape(C)
     # get the leverage scores for the rows
-    scores = get_leverage_scores(C, k)
+    scores = get_row_leverage_scores(C, k)
     # get probabilities
     probs = scores / np.sum(scores)
 
@@ -202,7 +202,7 @@ def data_reduction(k, df_train, y_train, row_reduce = True):
     time_cs = []
     for i in range(len(df_train)):
         start = time.perf_counter()
-        column_ls.append(get_leverage_scores(df_train[i], k))
+        column_ls.append(get_column_leverage_scores(df_train[i], k))
         time_ls.append(time.perf_counter() - start)
 
         start = time.perf_counter()
@@ -453,7 +453,7 @@ def compute_full_rmse(df_train, df_test, y_train, y_test, base, folder):
 
     return rmse_full
 
-def compare_methods(k, seed, base, folder, reps, row_reduction = True):
+def compare_methods_row_after_col(k, seed, base, folder, reps, row_reduction = True):
     """
     Conduct a full simulation study: data load, reduction, modeling, and RMSE evaluation.
 
