@@ -24,13 +24,19 @@ def get_random_scores(X):
 # OUTPUT:
 #   Numeric vector of length p containing the LS values
 # ------------------------------------------------------------
-def get_leverage_scores(X, k):
-    # check n < p
-    if X.shape[0] >= X.shape[1]:
-        #print("This function is designed for the case n < p. The matrix is now getting transposed.")
-        X = X.T
-
+def get_column_leverage_scores(X, k):
     # check k
+    if k > X.shape[0]:
+        print(k, X.shape[0])
+        raise ValueError("k must be <= nrow(X)")
+
+    # perform singular value decomposition to get V matrix
+    U, S, Vh = np.linalg.svd(X)
+
+    return np.sum(Vh.T[:,0:k-1] ** 2, axis = 1)
+
+def get_row_leverage_scores(X, k):
+    X = X.T
     if k > X.shape[0]:
         print(k, X.shape[0])
         raise ValueError("k must be <= nrow(X)")
@@ -52,12 +58,19 @@ def get_leverage_scores(X, k):
 # ------------------------------------------------------------
 def get_cross_leverage_scores(X, y):
 
-    # combine X and y to one matrix
+    if isinstance(X, np.ndarray):
+        X = pd.DataFrame(X)
+
+    if isinstance(y, np.ndarray):
+        y = pd.DataFrame(y)
+
+    print(X.shape, y.shape)
+
     Xy = pd.concat([X, y], axis=1)
 
-    # check n < p
-    if X.shape[0] >= X.shape[1]:
-        raise ValueError("This function is designed for the case n < p.")
+    Q, R = np.linalg.qr(Xy.T, mode="reduced")
+
+    return np.sum(Q[:-1, :] * Q[-1, :], axis=1)
 
     # perform the QR decomposition
     Q, R = np.linalg.qr(Xy.T)
@@ -84,6 +97,7 @@ def get_combined_scores(X, y, k, p_leverage):
 
     # calculate cross leverage scores and normalize to 1
     cls = np.abs(get_cross_leverage_scores(X, y))
-    cls = cls / np.sqrt(np.sum(ls ** 2))
+    cls = cls / np.sqrt(np.sum(cls ** 2))
+    print(len(ls), len(cls))
 
     return (1-p_leverage) * cls + p_leverage * ls
