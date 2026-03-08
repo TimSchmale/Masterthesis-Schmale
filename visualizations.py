@@ -156,7 +156,7 @@ def plot_time_comparison(time_dict):
     time_long = time_df.melt(
         id_vars="Replication",
         var_name="Method",
-        value_name="Score Calculation Time"
+        value_name="Time"
     )
 
     # Line plot
