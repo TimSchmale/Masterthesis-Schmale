@@ -1,6 +1,6 @@
 import pandas as pd
 import random
-from scoring_functions import *
+from scoring_functions import get_column_leverage_scores, get_row_leverage_scores, get_random_scores, get_combined_scores, get_cross_leverage_scores
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error
 import time
@@ -32,14 +32,12 @@ def column_reduction(X, scores, k):
     # sample the columns and fill S and D
     t = 0
     sampled_cols = []
-    S_cols = []
     D_diag = []
 
     for j in range(p):
         z = np.random.uniform(0, 1)
         if z <= scaled_probs[j]:
             sampled_cols.append(j)
-            S_cols.append(j)
             D_diag.append(1 / np.sqrt(scaled_probs[j]))
             t += 1
 
@@ -100,14 +98,12 @@ def row_reduction(C, y, k):
     # sample the rows and fill S and D
     t = 0
     sampled_rows = []
-    S_rows = []
     D_diag = []
 
     for j in range(n):
         z = np.random.uniform(0, 1)
         if z <= scaled_probs[j]:
             sampled_rows.append(j)
-            S_rows.append(j)
             D_diag.append(1 / np.sqrt(scaled_probs[j]))
             t += 1
 
