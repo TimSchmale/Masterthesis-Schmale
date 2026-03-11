@@ -26,25 +26,24 @@ def get_random_scores(X):
 # ------------------------------------------------------------
 def get_column_leverage_scores(X, k):
     # check k
-    if k > X.shape[0]:
+    if k > min(X.shape):
         print(k, X.shape[0])
-        raise ValueError("k must be <= nrow(X)")
+        raise ValueError("k must be <= min(n,p)")
 
     # perform singular value decomposition to get V matrix
-    U, S, Vh = np.linalg.svd(X)
+    U, S, Vh = np.linalg.svd(X, full_matrices=False)
 
-    return np.sum(Vh.T[:,0:k-1] ** 2, axis = 1)
+    return np.sum(Vh.T[:,0:k] ** 2, axis = 1)
 
 def get_row_leverage_scores(X, k):
-    X = X.T
-    if k > X.shape[0]:
-        print(k, X.shape[0])
-        raise ValueError("k must be <= nrow(X)")
 
-    # perform singular value decomposition to get V matrix
-    U, S, Vh = np.linalg.svd(X)
+    n, p = X.shape
+    if k > min(n,p):
+        raise ValueError("k must be <= min(n,p)")
 
-    return np.sum(Vh.T[:,0:k-1] ** 2, axis = 1)
+    U, S, Vh = np.linalg.svd(X, full_matrices=False)
+
+    return np.sum(U[:, 0:k]**2, axis=1)
 
 # ------------------------------------------------------------
 # Function to compute Column Cross Leverage Scores (CLS) for the case n<p
@@ -64,19 +63,18 @@ def get_cross_leverage_scores(X, y):
     if isinstance(y, np.ndarray):
         y = pd.DataFrame(y)
 
-    print(X.shape, y.shape)
+    XY = pd.concat([X, y], axis=1)
 
-    Xy = pd.concat([X, y], axis=1)
+    if XY.shape[0] < XY.shape[1]:
+        C = XY.T
+    else:
+        C = XY
 
-    Q, R = np.linalg.qr(Xy.T, mode="reduced")
+    Q, R = np.linalg.qr(C, mode="reduced")
 
-    return np.sum(Q[:-1, :] * Q[-1, :], axis=1)
+    cls = Q[:-1, :] @ Q[-1, :]
 
-    # perform the QR decomposition
-    Q, R = np.linalg.qr(Xy.T)
-
-    # compute CLS using inner products of rows of Q
-    return np.sum(Q[:-1, :] * Q[-1, :], axis = 1)
+    return cls
 
 # ------------------------------------------------------------
 # Function to compute Column Cross Leverage Scores (CLS) for the case n<p
@@ -92,12 +90,11 @@ def get_cross_leverage_scores(X, y):
 def get_combined_scores(X, y, k, p_leverage):
 
     # calculate leverage scores and normalize to 1
-    ls = get_leverage_scores(X, k)
+    ls = get_column_leverage_scores(X, k)
     ls = ls / np.sqrt(np.sum(ls ** 2))
 
     # calculate cross leverage scores and normalize to 1
     cls = np.abs(get_cross_leverage_scores(X, y))
     cls = cls / np.sqrt(np.sum(cls ** 2))
-    print(len(ls), len(cls))
 
     return (1-p_leverage) * cls + p_leverage * ls
