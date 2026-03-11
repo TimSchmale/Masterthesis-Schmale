@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 import time
-
+from scoring_functions import get_column_leverage_scores, get_row_leverage_scores, get_random_scores, get_combined_scores, get_cross_leverage_scores
 from statsmodels.sandbox.distributions.genpareto import shape
 
 from scoring_functions import *
@@ -27,26 +27,25 @@ def row_reduction(k, X, y, gaussian = False):
     R = np.zeros((r,d))
 
     # created the sketched versions of X and y
-    for i in range(n):
-        if gaussian:
-            # Gaussian sketching vector (r x 1)
-            sketch_vec = np.random.randn(r, 1)
-        else:
-            # Rademacher sketching vector (r x 1)
-            sketch_vec = np.random.choice([-1, 1], size=(r, 1))
+    if r <  n:
+        for i in range(n):
+            if gaussian:
+                # Gaussian sketching vector (r x 1)
+                sketch_vec = np.random.randn(r, 1)
+            else:
+                # Rademacher sketching vector (r x 1)
+                sketch_vec = np.random.choice([-1,1], size=(r,1)) / np.sqrt(r)
 
-        # Reduce X: Outer product: (r x 1) @ (1 x d) -> (r x d)
-        R += sketch_vec @ X[i, :].reshape(1, d)
+            # Reduce X: Outer product: (r x 1) @ (1 x d) -> (r x d)
+            R += sketch_vec @ X[i, :].reshape(1, d)
 
-        # Reduce y in parallel
-        if y is not None:
-            y_reduced += sketch_vec * y[i]
+            # Reduce y in parallel
+            if y is not None:
+                y_reduced += sketch_vec * y[i]
+    else:
+        R = X
+        y_reduced  = y
 
-    # scale R
-    R = R / np.sqrt(r)
-
-    # scale y_reduced
-    y_reduced = y_reduced / np.sqrt(r)
     return R, y_reduced
 
 def column_reduction(R, scores, k):
