@@ -364,4 +364,6 @@ def apply_row_after_col_reduction(k, seed, base, folder, reps, gaussian = False)
     rmse_full = compute_full_rmse(df_train, df_test, y_train, y_test, base, folder)
     rmse["Full"] = rmse_full
 
+    print("Data Reduction & Modeling completed.")
+
     return scores, timing_scores, C, R_reduced, rmse
