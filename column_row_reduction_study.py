@@ -449,7 +449,7 @@ def compute_full_rmse(df_train, df_test, y_train, y_test, base, folder):
 
     return rmse_full
 
-def compare_methods_row_after_col(k, seed, base, folder, reps, row_reduction = True):
+def apply_col_after__reduction(k, seed, base, folder, reps, row_reduction = True):
     """
     Conduct a full simulation study: data load, reduction, modeling, and RMSE evaluation.
 
@@ -457,10 +457,8 @@ def compare_methods_row_after_col(k, seed, base, folder, reps, row_reduction = T
     1. Load training and test data for multiple replications.
     2. Set random seeds for reproducibility.
     3. Perform data reduction using multiple scoring methods.
-    4. (Optional) Visualize score distributions.
-    5. Fit linear models on reduced datasets and compute RMSE.
-    6. Fit the Full Model on true selected features and compute RMSE.
-    7. Plot RMSE comparisons (line plot + boxplot).
+    4. Fit linear models on reduced datasets and compute RMSE.
+    5. Fit the Full Model on true selected features and compute RMSE.
 
     Parameters
     ----------
@@ -524,25 +522,13 @@ def compare_methods_row_after_col(k, seed, base, folder, reps, row_reduction = T
     ## 3. Data Reduction
     scores, time_scores, C, R = data_reduction(k, df_train, y_train, row_reduction)
 
-    print("Visualizing score distributions...")
-    ## 4. Score Distributions Visualization
-    # visualize_distributions(scores)
-
     print("Building linear models...")
-    ## 5. Linear Modeling
+    ## 4. Linear Modeling
     rmse = linear_modeling(C, R, df_test, y_test, y_train)
 
     print("Building Full Model / Benchmark...")
-    ## 6. Full Model
+    ## 5. Full Model
     rmse_full = compute_full_rmse(df_train, df_test, y_train, y_test, base, folder)
     rmse["Full"] = rmse_full
-
-    print("Plotting RMSE...")
-    ## 7. RMSE Plotting
-    plot_rmse_comparison(rmse)
-
-    print("Plotting Time...")
-    ## 8. Time Plotting
-    plot_time_comparison(time_scores)
 
     return scores, time_scores, C, R, rmse
