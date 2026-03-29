@@ -449,7 +449,7 @@ def compute_full_rmse(df_train, df_test, y_train, y_test, base, folder):
 
     return rmse_full
 
-def apply_col_after_row_reduction(k, seed, base, folder, reps, row_reduction = True):
+def apply_row_after_col_reduction(k, seed, base, folder, reps, row_reduction = True):
     """
     Conduct a full simulation study: data load, reduction, modeling, and RMSE evaluation.
 
