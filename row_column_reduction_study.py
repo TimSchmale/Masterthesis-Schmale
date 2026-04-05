@@ -4,8 +4,10 @@ import time
 from scoring_functions import get_column_leverage_scores, get_row_leverage_scores, get_random_scores, get_combined_scores, get_cross_leverage_scores
 from statsmodels.sandbox.distributions.genpareto import shape
 
+from sklearn.preprocessing import StandardScaler
+
 from scoring_functions import *
-from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import LinearRegression, Lasso
 from sklearn.metrics import mean_squared_error
 import random
 from visualizations import *
@@ -163,6 +165,65 @@ def data_reduction(k, df_train, y_train, gaussian = False):
     }
 
     return scores, timing_scores, C, R_reduced, y_reduced
+
+def fit_lasso_with_k_features(R, y, k, alphas=None):
+    from sklearn.linear_model import Lasso
+    if alphas is None:
+        alphas = np.logspace(-4, 1, 50)  # von schwach → stark regularisiert
+
+    scaler = StandardScaler()
+    R_scaled = scaler.fit_transform(R)
+
+    best_model = None
+    best_alpha = None
+    best_diff = np.inf
+    best_n_features = None
+
+    for alpha in alphas:
+        model = Lasso(alpha=alpha, max_iter=10000)
+        model.fit(R_scaled, y)
+
+        n_features = np.sum(model.coef_ != 0)
+        diff = abs(n_features - k)
+
+        if diff < best_diff:
+            best_diff = diff
+            best_model = model
+            best_alpha = alpha
+            best_n_features = n_features
+
+    return best_model, scaler, best_alpha, best_n_features
+
+
+def lasso_k_modeling(R_reduced, df_test, y_test, y_reduced, k):
+
+    rmse_lasso = []
+    selected_features = []
+    beta_lasso = []  # <--- NEU
+
+    for i in range(len(R_reduced)):
+
+        R = R_reduced[i]
+        y_r = y_reduced[i].ravel()
+
+        # --- Fit mit Ziel: k Features ---
+        model, scaler, alpha, n_feat = fit_lasso_with_k_features(R, y_r, k)
+
+        selected_features.append(n_feat)
+
+        # --- Beta speichern ---
+        beta_lasso.append(model.coef_)  # <--- DAS IST DEIN FINALER VEKTOR
+
+        # --- Test ---
+        X_test = df_test[i].to_numpy()
+        X_test_scaled = scaler.transform(X_test)
+
+        preds = model.predict(X_test_scaled)
+
+        rmse = np.sqrt(mean_squared_error(y_test[i], preds))
+        rmse_lasso.append(rmse)
+
+    return rmse_lasso, selected_features, beta_lasso
 
 
 def linear_modeling(C, R, df_test, y_test, y_reduced):
@@ -359,11 +420,19 @@ def apply_col_after_row_reduction(k, seed, base, folder, reps, gaussian = False)
     ## 4. Linear Modeling
     rmse = linear_modeling(C, R_reduced, df_test, y_test, y_reduced)
 
+    print("Running Lasso (Shrinkage baseline)...")
+    ## 5. Lasso Modeling
+    rmse_lasso, lasso_features, beta_lasso = lasso_k_modeling(
+        R_reduced, df_test, y_test, y_reduced, k
+    )
+
+    rmse["Lasso"] = rmse_lasso
+
     print("Building Full Model / Benchmark...")
-    ## 5. Full Model
+    ## 6. Full Model
     rmse_full = compute_full_rmse(df_train, df_test, y_train, y_test, base, folder)
     rmse["Full"] = rmse_full
 
     print("Data Reduction & Modeling completed.")
 
-    return scores, timing_scores, C, R_reduced, rmse
+    return scores, timing_scores, C, R_reduced, rmse, beta_lasso, lasso_features

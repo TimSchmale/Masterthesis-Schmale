@@ -124,7 +124,7 @@ def plot_rmse_comparison(rmse_dict):
     # display(p_line)
     display(p_box)
 
-    return rmse_df
+    return rmse_df, p_box
 
 # ==============================================================================================
 # Function to plot RMSE comparison (line + boxplot)
@@ -187,4 +187,4 @@ def plot_time_comparison(time_dict):
     # display(p_line)
     display(p_box)
 
-    return time_df
+    return time_df, p_box
