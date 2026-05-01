@@ -7,10 +7,16 @@ def evaluate_screening_performance(base, folder, C, reps, beta_lasso = None):
     # determine the beta hit lists
     beta, beta_nonzero, cls_hits, ls_hits, rs_hits, cs_hits, lasso_hits = get_beta_hits(base, folder, C, reps, beta_lasso)
 
+    if beta_lasso is None:
+        lasso_hits = None
+
     # visualize the percentages of betas hit by method
     visualize_hit_percentages(beta_nonzero, cls_hits, ls_hits, rs_hits, cs_hits, reps, lasso_hits)
 
     cls_share, ls_share, rs_share, cs_share, lasso_share= get_beta_share(beta, C, beta_lasso)
+
+    if beta_lasso is None:
+        lasso_share = None
 
     visualize_beta_share(cls_share, ls_share, rs_share, cs_share, lasso_share)
 
