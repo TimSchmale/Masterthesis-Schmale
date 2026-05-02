@@ -1,8 +1,9 @@
 import pandas as pd
 import random
-from scoring_functions import get_column_leverage_scores, get_row_leverage_scores, get_random_scores, get_combined_scores, get_cross_leverage_scores
-from sklearn.linear_model import LinearRegression
-from sklearn.metrics import mean_squared_error
+from scoring_functions import get_column_leverage_scores, get_log_reg_leverage_scores, get_random_scores, get_combined_scores, get_cross_leverage_scores
+from sklearn.linear_model import LogisticRegression
+import numpy as np
+from sklearn.metrics import log_loss
 import time
 from visualizations import *
 
@@ -71,62 +72,67 @@ def column_reduction(X, scores, k):
 # OUTPUT:
 #   reduced data matrix as well as vector of selected variable indices
 # ------------------------------------------------------------
-def row_reduction(C, y, k):
-    # get dimensions
-    n, c = np.shape(C)
-    # get the leverage scores for the rows
-    scores = get_row_leverage_scores(C, k)
-    # get probabilities
+def row_reduction(C, y):
+    # ensure numpy arrays
+    C = np.asarray(C)
+    y = np.asarray(y)
+
+    n, d = C.shape
+
+    # --- estimate mu via logistic regression ---
+    def estimate_mu_via_logreg(C, y):
+        model = LogisticRegression(
+            penalty='l2',
+            C=1e6,
+            solver='lbfgs',
+            max_iter=2000
+        )
+        model.fit(C, y)
+        beta = model.coef_.flatten()
+
+        v = C @ beta
+        pos = np.sum(np.abs(v[v > 0]))
+        neg = np.sum(np.abs(v[v < 0]))
+
+        if neg == 0:
+            return np.inf
+        return pos / neg
+
+    mu = estimate_mu_via_logreg(C, y)
+
+    # --- compute r from theorem ---
+    if mu == np.inf or mu <= 1:
+        mu = max(mu, 1.0001)
+
+    r_float = mu * d * np.log(mu * d)
+    r = int(np.ceil(r_float))
+
+    # cap r
+    r = max(1, min(r, n))
+
+    # --- compute leverage scores ---
+    scores = get_log_reg_leverage_scores(C)
     probs = scores / np.sum(scores)
 
-    # get the number of desired columns
-    r = int(np.ceil(c * np.log(c)))
+    # --- sample rows ---
+    rng = np.random.default_rng()
+    sampled_rows = rng.choice(
+        n,
+        size=r,
+        replace=False,
+        p=probs
+    )
 
-    # scale probs and set maximum to 1
-    scaled_probs = np.minimum(r * probs, 1)
+    R = C[sampled_rows, :]
+    y_reduced = y[sampled_rows]
 
-    # build mechanism when r > row number
-    if n < r:
-        #print("No row reduction needed. Original Matrix C kept.")
-        return {
-            "R": C,
-            "y": y,
-            "selected_rows": list(range(n)),
-            "probs": scaled_probs
-        }
-
-    # sample the rows and fill S and D
-    t = 0
-    sampled_rows = []
-    D_diag = []
-
-    for j in range(n):
-        z = np.random.uniform(0, 1)
-        if z <= scaled_probs[j]:
-            sampled_rows.append(j)
-            D_diag.append(1 / np.sqrt(scaled_probs[j]))
-            t += 1
-
-    # create S and D
-    t = len(sampled_rows)
-    S = np.zeros((t, n))
-    D = np.zeros((t, t))
-
-    for idx, j in enumerate(sampled_rows):
-        S[idx, j] = 1
-        D[idx, idx] = D_diag[idx]
-
-    # get C
-    C = np.array(C)
-    R = D @ S @ C
-
-    # get the reduced y
-    y_reduced = y.iloc[sampled_rows]
     return {
         "R": R,
         "y": y_reduced,
         "selected_rows": sampled_rows,
-        "probs": scaled_probs
+        "probs": probs,
+        "mu": mu,
+        "r": r
     }
 
 # ==============================================================================================
@@ -253,10 +259,10 @@ def data_reduction(k, df_train, y_train, row_reduce = True):
         R_cs = []
 
         for i in range(len(df_train)):
-            R_ls.append(row_reduction(C_ls[i]['C'], y_train[i], k))
-            R_cls.append(row_reduction(C_cls[i]['C'], y_train[i], k))
-            R_rs.append(row_reduction(C_rs[i]['C'], y_train[i], k))
-            R_cs.append(row_reduction(C_cs[i]['C'], y_train[i], k))
+            R_ls.append(row_reduction(C_ls[i]['C'], y_train[i]))
+            R_cls.append(row_reduction(C_cls[i]['C'], y_train[i]))
+            R_rs.append(row_reduction(C_rs[i]['C'], y_train[i]))
+            R_cs.append(row_reduction(C_cs[i]['C'], y_train[i]))
 
         R = {
             "R_ls": R_ls,
@@ -270,53 +276,15 @@ def data_reduction(k, df_train, y_train, row_reduce = True):
     return scores, timing_scores, C, R
 
 # ==============================================================================================
-# linear_modeling: Function for application of linear model to reduced data sets, and RMSE calculations
+# logistic_modeling: Function for application of logistic model to reduced data sets, and accuracy calculation
 # ==============================================================================================
 
-def linear_modeling(C, R, df_test, y_test, y_train):
+def logistic_modeling(C, R, df_test, y_test, y_train):
     """
-    Apply linear regression to reduced datasets and compute RMSE per replication and method.
-
-    This function fits LinearRegression models to row- and column-reduced datasets
-    obtained from multiple scoring methods (LS, CLS, RS, CS). It predicts on the
-    corresponding test datasets and calculates the RMSE for each replication.
-
-    Parameters
-    ----------
-    C : dict
-        Dictionary containing column-reduction information per method.
-        Keys: "C_ls", "C_cls", "C_rs", "C_cs"
-        Each value is a list of dictionaries per replication, with at least:
-            - 'selected_columns': list/array of selected column indices
-    R : dict
-        Dictionary containing row-reduction results per method.
-        Keys: "R_ls", "R_cls", "R_rs", "R_cs"
-        Each value is a list of dictionaries per replication, with at least:
-            - 'R': reduced training matrix
-            - 'y': corresponding training target vector
-    df_test : list of pd.DataFrame
-        Test datasets per replication
-    y_test : list of array-like
-        Test targets per replication
-
-    Returns
-    -------
-    rmse : dict
-        Dictionary containing RMSE per replication for each method:
-        {
-            "rmse_ls": list of RMSE for Leverage Scores,
-            "rmse_cls": list for Cross-Leverage Scores,
-            "rmse_rs": list for Random Scores,
-            "rmse_cs": list for Combined Scores
-        }
-
-    Notes
-    -----
-    - Assumes that the length of df_test, y_test, and the lists inside C/R are identical.
-    - LinearRegression is used from scikit-learn (deterministic, no random seed needed).
-    - RMSE is computed using sklearn.metrics.mean_squared_error.
+    Apply logistic regression to reduced datasets and compute log-loss per replication and method.
     """
-    # Fit linear models to the reduced data matrix
+
+    # Models per method
     model_ls = []
     model_cls = []
     model_rs = []
@@ -327,76 +295,97 @@ def linear_modeling(C, R, df_test, y_test, y_train):
     else:
         n_reps = len(C['C_ls'])
 
+    # --- Fit models ---
     for i in range(n_reps):
+
         if R is not None:
-            model = LinearRegression()
+            # LS
+            model = LogisticRegression(penalty='l2', C=1e6, solver='lbfgs', max_iter=2000)
             model.fit(R['R_ls'][i]['R'], R['R_ls'][i]['y'])
             model_ls.append(model)
-            model = LinearRegression()
+
+            # CLS
+            model = LogisticRegression(penalty='l2', C=1e6, solver='lbfgs', max_iter=2000)
             model.fit(R['R_cls'][i]['R'], R['R_cls'][i]['y'])
             model_cls.append(model)
-            model = LinearRegression()
+
+            # RS
+            model = LogisticRegression(penalty='l2', C=1e6, solver='lbfgs', max_iter=2000)
             model.fit(R['R_rs'][i]['R'], R['R_rs'][i]['y'])
             model_rs.append(model)
-            model = LinearRegression()
+
+            # CS
+            model = LogisticRegression(penalty='l2', C=1e6, solver='lbfgs', max_iter=2000)
             model.fit(R['R_cs'][i]['R'], R['R_cs'][i]['y'])
             model_cs.append(model)
+
         else:
-            model = LinearRegression()
+            # Only column reduction
+            model = LogisticRegression(penalty='l2', C=1e6, solver='lbfgs', max_iter=2000)
             model.fit(C['C_ls'][i]['C'], y_train[i])
             model_ls.append(model)
-            model = LinearRegression()
+
+            model = LogisticRegression(penalty='l2', C=1e6, solver='lbfgs', max_iter=2000)
             model.fit(C['C_cls'][i]['C'], y_train[i])
             model_cls.append(model)
-            model = LinearRegression()
+
+            model = LogisticRegression(penalty='l2', C=1e6, solver='lbfgs', max_iter=2000)
             model.fit(C['C_rs'][i]['C'], y_train[i])
             model_rs.append(model)
-            model = LinearRegression()
+
+            model = LogisticRegression(penalty='l2', C=1e6, solver='lbfgs', max_iter=2000)
             model.fit(C['C_cs'][i]['C'], y_train[i])
             model_cs.append(model)
 
-
-    # Build predictions
-    predictions_ls = []
-    predictions_cls = []
-    predictions_rs = []
-    predictions_cs = []
-    df_test_reduced_ls = []
-    df_test_reduced_cls = []
-    df_test_reduced_rs = []
-    df_test_reduced_cs = []
+    # --- Predictions ---
+    pred_ls = []
+    pred_cls = []
+    pred_rs = []
+    pred_cs = []
 
     for i in range(n_reps):
-        df_test_reduced_ls.append(df_test[i].iloc[:, C['C_ls'][i]['selected_columns']])
-        predictions_ls.append(model_ls[i].predict(df_test_reduced_ls[i]))
-        df_test_reduced_cls.append(df_test[i].iloc[:, C['C_cls'][i]['selected_columns']])
-        predictions_cls.append(model_cls[i].predict(df_test_reduced_cls[i]))
-        df_test_reduced_rs.append(df_test[i].iloc[:, C['C_rs'][i]['selected_columns']])
-        predictions_rs.append(model_rs[i].predict(df_test_reduced_rs[i]))
-        df_test_reduced_cs.append(df_test[i].iloc[:, C['C_cs'][i]['selected_columns']])
-        predictions_cs.append(model_cs[i].predict(df_test_reduced_cs[i]))
+        # LS
+        X_test_ls = df_test[i].iloc[:, C['C_ls'][i]['selected_columns']]
+        pred_ls.append(model_ls[i].predict_proba(X_test_ls)[:, 1])
 
-    # Calculate RMSE
-    rmse_ls = []
-    rmse_cls = []
-    rmse_rs = []
-    rmse_cs = []
+        # CLS
+        X_test_cls = df_test[i].iloc[:, C['C_cls'][i]['selected_columns']]
+        pred_cls.append(model_cls[i].predict_proba(X_test_cls)[:, 1])
+
+        # RS
+        X_test_rs = df_test[i].iloc[:, C['C_rs'][i]['selected_columns']]
+        pred_rs.append(model_rs[i].predict_proba(X_test_rs)[:, 1])
+
+        # CS
+        X_test_cs = df_test[i].iloc[:, C['C_cs'][i]['selected_columns']]
+        pred_cs.append(model_cs[i].predict_proba(X_test_cs)[:, 1])
+
+    # --- Compute log-loss ---
+    ll_ls = []
+    ll_cls = []
+    ll_rs = []
+    ll_cs = []
+
     for i in range(n_reps):
-        rmse_ls.append(np.sqrt(mean_squared_error(y_test[i], predictions_ls[i])))
-        rmse_cls.append(np.sqrt(mean_squared_error(y_test[i], predictions_cls[i])))
-        rmse_rs.append(np.sqrt(mean_squared_error(y_test[i], predictions_rs[i])))
-        rmse_cs.append(np.sqrt(mean_squared_error(y_test[i], predictions_cs[i])))
-    rmse = {"LS": rmse_ls, "CLS": rmse_cls, "RS": rmse_rs, "CS": rmse_cs, }
+        ll_ls.append(log_loss(y_test[i], pred_ls[i]))
+        ll_cls.append(log_loss(y_test[i], pred_cls[i]))
+        ll_rs.append(log_loss(y_test[i], pred_rs[i]))
+        ll_cs.append(log_loss(y_test[i], pred_cs[i]))
 
-    return rmse
+    return {
+        "LL_LS": ll_ls,
+        "LL_CLS": ll_cls,
+        "LL_RS": ll_rs,
+        "LL_CS": ll_cs
+    }
 
 
 # ==============================================================================================
 # Full Model: Application of Linear Model to the optimal set of columns
 # ==============================================================================================
-def compute_full_rmse(df_train, df_test, y_train, y_test, base, folder):
+def compute_full_logloss(df_train, df_test, y_train, y_test, base, folder):
     """
-    Compute RMSE per replication for the Full Model using the true beta selection.
+    Compute log-loss per replication for the Full Model using the true beta selection.
 
     Parameters
     ----------
@@ -415,10 +404,10 @@ def compute_full_rmse(df_train, df_test, y_train, y_test, base, folder):
 
     Returns
     -------
-    rmse_full : list of float
-        RMSE per replication
+    logloss_full : list of float
+        Log-loss per replication
     """
-    rmse_full = []
+    logloss_full = []
 
     for i in range(len(df_train)):
         # Load beta for this replication
@@ -436,101 +425,76 @@ def compute_full_rmse(df_train, df_test, y_train, y_test, base, folder):
         y_tr = np.ravel(y_train[i])
         y_te = np.ravel(y_test[i])
 
-        # Fit linear model
-        model = LinearRegression()
+        # Fit logistic model
+        model = LogisticRegression(
+            penalty='l2',
+            C=1e6,
+            solver='lbfgs',
+            max_iter=2000
+        )
         model.fit(X_train_sel.to_numpy(), y_tr)
 
-        # Predict on test set
-        predictions = model.predict(X_test_sel.to_numpy())
+        # Predict probabilities on test set
+        pred = model.predict_proba(X_test_sel.to_numpy())[:, 1]
 
-        # Compute RMSE
-        rmse = np.sqrt(mean_squared_error(y_te, predictions))
-        rmse_full.append(rmse)
+        # Compute log-loss
+        ll = log_loss(y_te, pred)
+        logloss_full.append(ll)
 
-    return rmse_full
+    return logloss_full
 
-def apply_row_after_col_reduction(k, seed, base, folder, reps, row_reduction = True):
+def apply_row_after_col_reduction_log(k, seed, base, folder, reps, row_reduction=True):
     """
-    Conduct a full simulation study: data load, reduction, modeling, and RMSE evaluation.
-
-    This function performs the complete workflow of the simulation study:
-    1. Load training and test data for multiple replications.
-    2. Set random seeds for reproducibility.
-    3. Perform data reduction using multiple scoring methods.
-    4. Fit linear models on reduced datasets and compute RMSE.
-    5. Fit the Full Model on true selected features and compute RMSE.
-
-    Parameters
-    ----------
-    k : int
-        Number of features/columns to select per reduction step.
-    seed : int
-        Seed for reproducibility (affects Python random and NumPy random).
-    folder : str
-        Folder name containing the simulation data files for all replications.
-    reps : int
-        Number of replications to process.
-
-    Returns
-    -------
-    scores : dict
-        Dictionary of scores per method and replication, output from `data_reduction`.
-    C : dict
-        Dictionary of column-reduced data per method, output from `data_reduction`.
-    R : dict
-        Dictionary of row-reduced data per method, output from `data_reduction`.
-    rmse : dict
-        Dictionary of RMSE per method, including the Full Model.
-
-    Notes
-    -----
-    - Assumes that the CSV files are stored under `base/folder/rep{i}/` with names:
-      'X_train.csv', 'X_test.csv', 'y_train.csv', 'y_test.csv'.
-    - The Full Model uses the true beta selection stored in beta.csv in each replication folder.
-    - Random seeds are set for both Python's `random` and NumPy's `np.random` to ensure reproducibility.
-    - RMSE plotting is performed using `plot_rmse_comparison`.
+    Full simulation workflow for logistic regression:
+    - Load data
+    - Perform column and row reduction
+    - Fit logistic models on reduced datasets
+    - Fit Full Model using true beta
+    - Compute log-loss for all methods
     """
-    ## 1. Data Load
-    # initialize lists to store data
+
+    # ------------------------------------------------------------
+    # 1. Data Load
+    # ------------------------------------------------------------
     df_train = []
     df_test = []
     y_train = []
     y_test = []
 
     print("Reading in the simulation data...")
-    # read in the simulation data
     for i in range(reps):
-        df_train.append(
-            pd.read_csv(f"{base}/{folder}/X_train{i + 1}.csv")
-        )
-        df_test.append(
-            pd.read_csv(f"{base}/{folder}/X_test{i + 1}.csv")
-        )
-        y_train.append(
-            pd.read_csv(f"{base}/{folder}/y_train{i + 1}.csv")
-        )
-        y_test.append(
-            pd.read_csv(f"{base}/{folder}/y_test{i + 1}.csv")
-        )
+        df_train.append(pd.read_csv(f"{base}/{folder}/X_train{i + 1}.csv"))
+        df_test.append(pd.read_csv(f"{base}/{folder}/X_test{i + 1}.csv"))
+        y_train.append(pd.read_csv(f"{base}/{folder}/y_binary_train{i + 1}.csv"))
+        y_test.append(pd.read_csv(f"{base}/{folder}/y_binary_test{i + 1}.csv"))
 
+    # ------------------------------------------------------------
+    # 2. Seeding
+    # ------------------------------------------------------------
     print("Setting the seed...")
-    ## 2. Seeding
     random.seed(seed)
     np.random.seed(seed)
 
+    # ------------------------------------------------------------
+    # 3. Data Reduction
+    # ------------------------------------------------------------
     print("Performing data reduction...")
-    ## 3. Data Reduction
     scores, time_scores, C, R = data_reduction(k, df_train, y_train, row_reduction)
 
-    print("Building linear models...")
-    ## 4. Linear Modeling
-    rmse = linear_modeling(C, R, df_test, y_test, y_train)
+    # ------------------------------------------------------------
+    # 4. Logistic Modeling
+    # ------------------------------------------------------------
+    print("Building logistic models...")
+    logloss = logistic_modeling(C, R, df_test, y_test, y_train)
 
+    # ------------------------------------------------------------
+    # 5. Full Model (Benchmark)
+    # ------------------------------------------------------------
     print("Building Full Model / Benchmark...")
-    ## 5. Full Model
-    rmse_full = compute_full_rmse(df_train, df_test, y_train, y_test, base, folder)
-    rmse["Full"] = rmse_full
+    logloss_full = compute_full_logloss(df_train, df_test, y_train, y_test, base, folder)
+    logloss["Full"] = logloss_full
 
     print("Data Reduction & Modeling completed.")
 
-    return scores, time_scores, C, R, rmse
+    return scores, time_scores, C, R, logloss
+
