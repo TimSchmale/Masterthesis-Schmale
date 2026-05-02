@@ -45,6 +45,19 @@ def get_row_leverage_scores(X, k):
 
     return np.sum(U[:, 0:k]**2, axis=1)
 
+def get_log_reg_leverage_scores(X: np.ndarray, p=1):
+    """
+        Computes leverage scores.
+    """
+    if not len(X.shape) == 2:
+        raise ValueError("X must be 2D!")
+
+    Q, *_ = np.linalg.qr(X)
+
+    leverage_scores = np.power(np.linalg.norm(Q, axis=1, ord=p), p)
+
+    return leverage_scores
+
 # ------------------------------------------------------------
 # Function to compute Column Cross Leverage Scores (CLS) for the case n<p
 #
