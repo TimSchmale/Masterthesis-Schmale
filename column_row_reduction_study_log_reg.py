@@ -3,7 +3,7 @@ import random
 from scoring_functions import get_column_leverage_scores, get_log_reg_leverage_scores, get_random_scores, get_combined_scores, get_cross_leverage_scores
 from sklearn.linear_model import LogisticRegression
 import numpy as np
-from sklearn.metrics import log_loss
+from sklearn.metrics import brier_score_loss
 import time
 from visualizations import *
 
@@ -61,6 +61,26 @@ def column_reduction(X, scores, k):
         "probs": scaled_probs
     }
 
+# --- estimate mu via logistic regression ---
+def estimate_mu_via_logreg(C, y):
+    model = LogisticRegression(
+        l1_ratio=0,
+        C=np.inf,
+        solver='lbfgs',
+        max_iter=2000
+    )
+
+    model.fit(C, y)
+    beta = model.coef_.flatten()
+
+    v = C @ beta
+    pos = np.sum(np.abs(v[v > 0]))
+    neg = np.sum(np.abs(v[v < 0]))
+
+    if neg == 0:
+        return np.inf
+    return pos / neg
+
 # ------------------------------------------------------------
 # Function to perform a row reduction based on a score vector
 #
@@ -72,33 +92,12 @@ def column_reduction(X, scores, k):
 # OUTPUT:
 #   reduced data matrix as well as vector of selected variable indices
 # ------------------------------------------------------------
-def row_reduction(C, y):
+def row_reduction(C, y, mu):
     # ensure numpy arrays
     C = np.asarray(C)
     y = np.asarray(y)
 
     n, d = C.shape
-
-    # --- estimate mu via logistic regression ---
-    def estimate_mu_via_logreg(C, y):
-        model = LogisticRegression(
-            penalty='l2',
-            C=1e6,
-            solver='lbfgs',
-            max_iter=2000
-        )
-        model.fit(C, y)
-        beta = model.coef_.flatten()
-
-        v = C @ beta
-        pos = np.sum(np.abs(v[v > 0]))
-        neg = np.sum(np.abs(v[v < 0]))
-
-        if neg == 0:
-            return np.inf
-        return pos / neg
-
-    mu = estimate_mu_via_logreg(C, y)
 
     # --- compute r from theorem ---
     if mu == np.inf or mu <= 1:
@@ -258,11 +257,19 @@ def data_reduction(k, df_train, y_train, row_reduce = True):
         R_rs = []
         R_cs = []
 
+        # estimate mu
+        mu_list = []
+
         for i in range(len(df_train)):
-            R_ls.append(row_reduction(C_ls[i]['C'], y_train[i]))
-            R_cls.append(row_reduction(C_cls[i]['C'], y_train[i]))
-            R_rs.append(row_reduction(C_rs[i]['C'], y_train[i]))
-            R_cs.append(row_reduction(C_cs[i]['C'], y_train[i]))
+            # μ nur einmal pro Replikation berechnen
+            mu_i = estimate_mu_via_logreg(C_ls[i]['C'], y_train[i])
+            mu_list.append(mu_i)
+
+            # Row Reduction für alle Methoden mit demselben μ_i
+            R_ls.append(row_reduction(C_ls[i]['C'], y_train[i], mu_i))
+            R_cls.append(row_reduction(C_cls[i]['C'], y_train[i], mu_i))
+            R_rs.append(row_reduction(C_rs[i]['C'], y_train[i], mu_i))
+            R_cs.append(row_reduction(C_cs[i]['C'], y_train[i], mu_i))
 
         R = {
             "R_ls": R_ls,
@@ -271,9 +278,10 @@ def data_reduction(k, df_train, y_train, row_reduce = True):
             "R_cs": R_cs
         }
     else:
+
         R = None
 
-    return scores, timing_scores, C, R
+    return scores, timing_scores, C, R, mu_list
 
 # ==============================================================================================
 # logistic_modeling: Function for application of logistic model to reduced data sets, and accuracy calculation
@@ -300,40 +308,48 @@ def logistic_modeling(C, R, df_test, y_test, y_train):
 
         if R is not None:
             # LS
-            model = LogisticRegression(penalty='l2', C=1e6, solver='lbfgs', max_iter=2000)
+            model = LogisticRegression(l1_ratio=0, C=np.inf, solver='lbfgs', max_iter=2000)
+
             model.fit(R['R_ls'][i]['R'], R['R_ls'][i]['y'])
             model_ls.append(model)
 
             # CLS
-            model = LogisticRegression(penalty='l2', C=1e6, solver='lbfgs', max_iter=2000)
+            model = LogisticRegression(l1_ratio=0, C=np.inf, solver='lbfgs', max_iter=2000)
+
             model.fit(R['R_cls'][i]['R'], R['R_cls'][i]['y'])
             model_cls.append(model)
 
             # RS
-            model = LogisticRegression(penalty='l2', C=1e6, solver='lbfgs', max_iter=2000)
+            model = LogisticRegression(l1_ratio=0, C=np.inf, solver='lbfgs', max_iter=2000)
+
             model.fit(R['R_rs'][i]['R'], R['R_rs'][i]['y'])
             model_rs.append(model)
 
             # CS
-            model = LogisticRegression(penalty='l2', C=1e6, solver='lbfgs', max_iter=2000)
+            model = LogisticRegression(l1_ratio=0, C=np.inf, solver='lbfgs', max_iter=2000)
+
             model.fit(R['R_cs'][i]['R'], R['R_cs'][i]['y'])
             model_cs.append(model)
 
         else:
             # Only column reduction
-            model = LogisticRegression(penalty='l2', C=1e6, solver='lbfgs', max_iter=2000)
+            model = LogisticRegression(l1_ratio=0, C=np.inf, solver='lbfgs', max_iter=2000)
+
             model.fit(C['C_ls'][i]['C'], y_train[i])
             model_ls.append(model)
 
-            model = LogisticRegression(penalty='l2', C=1e6, solver='lbfgs', max_iter=2000)
+            model = LogisticRegression(l1_ratio=0, C=np.inf, solver='lbfgs', max_iter=2000)
+
             model.fit(C['C_cls'][i]['C'], y_train[i])
             model_cls.append(model)
 
-            model = LogisticRegression(penalty='l2', C=1e6, solver='lbfgs', max_iter=2000)
+            model = LogisticRegression(l1_ratio=0, C=np.inf, solver='lbfgs', max_iter=2000)
+
             model.fit(C['C_rs'][i]['C'], y_train[i])
             model_rs.append(model)
 
-            model = LogisticRegression(penalty='l2', C=1e6, solver='lbfgs', max_iter=2000)
+            model = LogisticRegression(l1_ratio=0, C=np.inf, solver='lbfgs', max_iter=2000)
+
             model.fit(C['C_cs'][i]['C'], y_train[i])
             model_cs.append(model)
 
@@ -367,10 +383,10 @@ def logistic_modeling(C, R, df_test, y_test, y_train):
     ll_cs = []
 
     for i in range(n_reps):
-        ll_ls.append(log_loss(y_test[i], pred_ls[i]))
-        ll_cls.append(log_loss(y_test[i], pred_cls[i]))
-        ll_rs.append(log_loss(y_test[i], pred_rs[i]))
-        ll_cs.append(log_loss(y_test[i], pred_cs[i]))
+        ll_ls.append(brier_score_loss(y_test[i], pred_ls[i]))
+        ll_cls.append(brier_score_loss(y_test[i], pred_cls[i]))
+        ll_rs.append(brier_score_loss(y_test[i], pred_rs[i]))
+        ll_cs.append(brier_score_loss(y_test[i], pred_cs[i]))
 
     return {
         "LL_LS": ll_ls,
@@ -381,9 +397,9 @@ def logistic_modeling(C, R, df_test, y_test, y_train):
 
 
 # ==============================================================================================
-# Full Model: Application of Linear Model to the optimal set of columns
+# Full Model: Application of Logistic Model to the optimal set of columns
 # ==============================================================================================
-def compute_full_logloss(df_train, df_test, y_train, y_test, base, folder):
+def compute_full_brierloss(df_train, df_test, y_train, y_test, base, folder):
     """
     Compute log-loss per replication for the Full Model using the true beta selection.
 
@@ -404,10 +420,10 @@ def compute_full_logloss(df_train, df_test, y_train, y_test, base, folder):
 
     Returns
     -------
-    logloss_full : list of float
+    brierloss_full : list of float
         Log-loss per replication
     """
-    logloss_full = []
+    brierloss_full = []
 
     for i in range(len(df_train)):
         # Load beta for this replication
@@ -427,21 +443,22 @@ def compute_full_logloss(df_train, df_test, y_train, y_test, base, folder):
 
         # Fit logistic model
         model = LogisticRegression(
-            penalty='l2',
-            C=1e6,
+            l1_ratio=0,
+            C=np.inf,
             solver='lbfgs',
             max_iter=2000
         )
+
         model.fit(X_train_sel.to_numpy(), y_tr)
 
         # Predict probabilities on test set
         pred = model.predict_proba(X_test_sel.to_numpy())[:, 1]
 
         # Compute log-loss
-        ll = log_loss(y_te, pred)
-        logloss_full.append(ll)
+        ll = brier_score_loss(y_te, pred)
+        brierloss_full.append(ll)
 
-    return logloss_full
+    return brierloss_full
 
 def apply_row_after_col_reduction_log(k, seed, base, folder, reps, row_reduction=True):
     """
@@ -479,22 +496,22 @@ def apply_row_after_col_reduction_log(k, seed, base, folder, reps, row_reduction
     # 3. Data Reduction
     # ------------------------------------------------------------
     print("Performing data reduction...")
-    scores, time_scores, C, R = data_reduction(k, df_train, y_train, row_reduction)
+    scores, time_scores, C, R, mu= data_reduction(k, df_train, y_train, row_reduction)
 
     # ------------------------------------------------------------
     # 4. Logistic Modeling
     # ------------------------------------------------------------
     print("Building logistic models...")
-    logloss = logistic_modeling(C, R, df_test, y_test, y_train)
+    brierloss = logistic_modeling(C, R, df_test, y_test, y_train)
 
     # ------------------------------------------------------------
     # 5. Full Model (Benchmark)
     # ------------------------------------------------------------
     print("Building Full Model / Benchmark...")
-    logloss_full = compute_full_logloss(df_train, df_test, y_train, y_test, base, folder)
-    logloss["Full"] = logloss_full
+    brierloss_full = compute_full_brierloss(df_train, df_test, y_train, y_test, base, folder)
+    brierloss["Full"] = brierloss_full
 
     print("Data Reduction & Modeling completed.")
 
-    return scores, time_scores, C, R, logloss
+    return scores, time_scores, C, R, brierloss, mu
 
