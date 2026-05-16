@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 import random
 from scoring_functions import get_column_leverage_scores, get_row_leverage_scores, get_random_scores, get_combined_scores, get_cross_leverage_scores
 from sklearn.linear_model import LinearRegression
@@ -6,51 +7,43 @@ from sklearn.metrics import mean_squared_error
 import time
 from visualizations import *
 
-# ------------------------------------------------------------
-# Function to perform a column reduction given score values for each column as calculation basis
-#
-# INPUT:
-#   X         : data matrix of dimension n x p
-#   scores    : scoring vector of length p
-#   k         : rank parameter (desired rank of approximation)
-#
-# OUTPUT:
-#   reduced data matrix as well as vector of selected variable indices
-# ------------------------------------------------------------
 def column_reduction(X, scores, k):
-    # get dimensions
-    n, p = np.shape(X)
+
+    # determine the dimensions of the data matrix
+    n, d = np.shape(X)
     # get probabilities
     probs = scores / np.sum(scores)
 
-    # get the number of desired columns
+    # get the number of required columns according to CUR theorem
     c = int(np.ceil(k * np.log(k)))
 
-    # scale probs and set maximum to 1
+    # scale probs and set maximum possible probability to 1
     scaled_probs = np.minimum(c * probs, 1)
 
-    # sample the columns and fill S and D
+    # initialize sampling matrix S and rescaling matrix D
     t = 0
     sampled_cols = []
     D_diag = []
 
-    for j in range(p):
+    # EXPECTED(c) column algorithm
+    for j in range(d):
+        # draw a uniform value and compare the probability against it
         z = np.random.uniform(0, 1)
         if z <= scaled_probs[j]:
+            # fill rescaling and sampling matrix components as defined in algorithm
             sampled_cols.append(j)
             D_diag.append(1 / np.sqrt(scaled_probs[j]))
             t += 1
 
-    # create S and D
+    # create S and D in matrix form
     t = len(sampled_cols)
-    S = np.zeros((p, t))
+    S = np.zeros((d, t))
     D = np.zeros((t, t))
-
     for idx, j in enumerate(sampled_cols):
         S[j, idx] = 1
         D[idx, idx] = D_diag[idx]
 
-    # get C
+    # calculate C according to CUR paper as S and D are now given
     X = np.array(X)
     C = X @ S @ D
 
@@ -60,65 +53,50 @@ def column_reduction(X, scores, k):
         "probs": scaled_probs
     }
 
-# ------------------------------------------------------------
-# Function to perform a row reduction based on a score vector
-#
-# INPUT:
-#   C         : reduced data matrix of dimension n x c
-#   y         : response vector of length n
-#   k         : rank parameter (desired rank of approximation)
-#
-# OUTPUT:
-#   reduced data matrix as well as vector of selected variable indices
-# ------------------------------------------------------------
 def row_reduction(C, y, k):
-    # get dimensions
+
+    # get dimensions of the reduced data matrix
     n, c = np.shape(C)
-    # get the leverage scores for the rows
+
+    # get the row leverage scores
     scores = get_row_leverage_scores(C, k)
-    # get probabilities
+
+    # determine the probabilities
     probs = scores / np.sum(scores)
 
-    # get the number of desired columns
+    # get the number of required rows according to the CUR theorem
     r = int(np.ceil(c * np.log(c)))
 
-    # scale probs and set maximum to 1
+    # scale probs and set their maximum to 1
     scaled_probs = np.minimum(r * probs, 1)
 
-    # build mechanism when r > row number
-    if n < r:
-        #print("No row reduction needed. Original Matrix C kept.")
-        return {
-            "R": C,
-            "y": y,
-            "selected_rows": list(range(n)),
-            "probs": scaled_probs
-        }
-
-    # sample the rows and fill S and D
+    # initialize sampling matrix S and rescaling matrix D
     t = 0
     sampled_rows = []
     D_diag = []
 
-    for j in range(n):
+    # EXPECTED(r) row algorithm
+    for i in range(n):
         z = np.random.uniform(0, 1)
-        if z <= scaled_probs[j]:
-            sampled_rows.append(j)
-            D_diag.append(1 / np.sqrt(scaled_probs[j]))
+        if z <= scaled_probs[i]:
+            sampled_rows.append(i)
+            D_diag.append(1 / np.sqrt(scaled_probs[i]))
             t += 1
 
-    # create S and D
+    # create S and D in matrix form
     t = len(sampled_rows)
-    S = np.zeros((t, n))
+    S = np.zeros((n, t))
     D = np.zeros((t, t))
 
-    for idx, j in enumerate(sampled_rows):
-        S[idx, j] = 1
+    for idx, i in enumerate(sampled_rows):
+        S[i, idx] = 1
         D[idx, idx] = D_diag[idx]
 
-    # get C
+    # determine C according to the CUR paper
     C = np.array(C)
-    R = D @ S @ C
+    R = D @ S.T @ C
+
+    #print(f"k = {k} resulting in shape(C): {np.shape(R)}")
 
     # get the reduced y
     y_reduced = y.iloc[sampled_rows]
@@ -129,63 +107,7 @@ def row_reduction(C, y, k):
         "probs": scaled_probs
     }
 
-# ==============================================================================================
-# data_reduction: Function for data reduction of Simulation Study
-# ==============================================================================================
-
 def data_reduction(k, df_train, y_train, row_reduce = True):
-    """
-    Perform data reduction on simulated datasets using multiple scoring methods.
-
-    This function calculates column- and row-reduction sets based on four different
-    scoring methods (Leverage Scores, Cross-Leverage Scores, Random Scores, Combined Scores)
-    for each replication of the simulation study. It returns the raw scores,
-    the column-reduced datasets, and the row-reduced datasets.
-
-    Parameters
-    ----------
-    k : int
-        Number of features/columns to select per reduction step.
-    df_train : list of pd.DataFrame
-        List of training datasets, one per replication.
-    y_train : list of array-like
-        List of target vectors corresponding to each training dataset.
-
-    Returns
-    -------
-    scores : dict
-        Dictionary of calculated scores per method and replication:
-        {
-            "LS": list of leverage scores per replication,
-            "CLS": list of cross-leverage scores per replication,
-            "RS": list of random scores per replication,
-            "CS": list of combined scores per replication
-        }
-
-    C : dict
-        Dictionary of column-reduced datasets per method:
-        {
-            "C_ls": list of column-reduction results for LS,
-            "C_cls": list for CLS,
-            "C_rs": list for RS,
-            "C_cs": list for CS
-        }
-
-    R : dict
-        Dictionary of row-reduced datasets per method:
-        {
-            "R_ls": list of row-reduction results for LS,
-            "R_cls": list for CLS,
-            "R_rs": list for RS,
-            "R_cs": list for CS
-        }
-
-    Notes
-    -----
-    - Each list in the output dictionaries corresponds to one replication of the simulation.
-    - The row and column reduction functions should return dictionaries containing
-      the reduced matrices and any metadata needed for downstream modeling.
-    """
     # 1. Perform the score calculations
     column_ls = []
     column_cls = []
@@ -269,53 +191,7 @@ def data_reduction(k, df_train, y_train, row_reduce = True):
 
     return scores, timing_scores, C, R
 
-# ==============================================================================================
-# linear_modeling: Function for application of linear model to reduced data sets, and RMSE calculations
-# ==============================================================================================
-
 def linear_modeling(C, R, df_test, y_test, y_train):
-    """
-    Apply linear regression to reduced datasets and compute RMSE per replication and method.
-
-    This function fits LinearRegression models to row- and column-reduced datasets
-    obtained from multiple scoring methods (LS, CLS, RS, CS). It predicts on the
-    corresponding test datasets and calculates the RMSE for each replication.
-
-    Parameters
-    ----------
-    C : dict
-        Dictionary containing column-reduction information per method.
-        Keys: "C_ls", "C_cls", "C_rs", "C_cs"
-        Each value is a list of dictionaries per replication, with at least:
-            - 'selected_columns': list/array of selected column indices
-    R : dict
-        Dictionary containing row-reduction results per method.
-        Keys: "R_ls", "R_cls", "R_rs", "R_cs"
-        Each value is a list of dictionaries per replication, with at least:
-            - 'R': reduced training matrix
-            - 'y': corresponding training target vector
-    df_test : list of pd.DataFrame
-        Test datasets per replication
-    y_test : list of array-like
-        Test targets per replication
-
-    Returns
-    -------
-    rmse : dict
-        Dictionary containing RMSE per replication for each method:
-        {
-            "rmse_ls": list of RMSE for Leverage Scores,
-            "rmse_cls": list for Cross-Leverage Scores,
-            "rmse_rs": list for Random Scores,
-            "rmse_cs": list for Combined Scores
-        }
-
-    Notes
-    -----
-    - Assumes that the length of df_test, y_test, and the lists inside C/R are identical.
-    - LinearRegression is used from scikit-learn (deterministic, no random seed needed).
-    - RMSE is computed using sklearn.metrics.mean_squared_error.
-    """
     # Fit linear models to the reduced data matrix
     model_ls = []
     model_cls = []
@@ -390,34 +266,7 @@ def linear_modeling(C, R, df_test, y_test, y_train):
 
     return rmse
 
-
-# ==============================================================================================
-# Full Model: Application of Linear Model to the optimal set of columns
-# ==============================================================================================
 def compute_full_rmse(df_train, df_test, y_train, y_test, base, folder):
-    """
-    Compute RMSE per replication for the Full Model using the true beta selection.
-
-    Parameters
-    ----------
-    df_train : list of pd.DataFrame
-        Training datasets per replication
-    df_test : list of pd.DataFrame
-        Test datasets per replication
-    y_train : list of arrays
-        Training targets per replication
-    y_test : list of arrays
-        Test targets per replication
-    base : str
-        Base path to replication folders
-    folder : str
-        Folder name inside base containing the beta.csv files
-
-    Returns
-    -------
-    rmse_full : list of float
-        RMSE per replication
-    """
     rmse_full = []
 
     for i in range(len(df_train)):
@@ -450,46 +299,6 @@ def compute_full_rmse(df_train, df_test, y_train, y_test, base, folder):
     return rmse_full
 
 def apply_row_after_col_reduction(k, seed, base, folder, reps, row_reduction = True):
-    """
-    Conduct a full simulation study: data load, reduction, modeling, and RMSE evaluation.
-
-    This function performs the complete workflow of the simulation study:
-    1. Load training and test data for multiple replications.
-    2. Set random seeds for reproducibility.
-    3. Perform data reduction using multiple scoring methods.
-    4. Fit linear models on reduced datasets and compute RMSE.
-    5. Fit the Full Model on true selected features and compute RMSE.
-
-    Parameters
-    ----------
-    k : int
-        Number of features/columns to select per reduction step.
-    seed : int
-        Seed for reproducibility (affects Python random and NumPy random).
-    folder : str
-        Folder name containing the simulation data files for all replications.
-    reps : int
-        Number of replications to process.
-
-    Returns
-    -------
-    scores : dict
-        Dictionary of scores per method and replication, output from `data_reduction`.
-    C : dict
-        Dictionary of column-reduced data per method, output from `data_reduction`.
-    R : dict
-        Dictionary of row-reduced data per method, output from `data_reduction`.
-    rmse : dict
-        Dictionary of RMSE per method, including the Full Model.
-
-    Notes
-    -----
-    - Assumes that the CSV files are stored under `base/folder/rep{i}/` with names:
-      'X_train.csv', 'X_test.csv', 'y_train.csv', 'y_test.csv'.
-    - The Full Model uses the true beta selection stored in beta.csv in each replication folder.
-    - Random seeds are set for both Python's `random` and NumPy's `np.random` to ensure reproducibility.
-    - RMSE plotting is performed using `plot_rmse_comparison`.
-    """
     ## 1. Data Load
     # initialize lists to store data
     df_train = []
