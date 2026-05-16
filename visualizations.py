@@ -1,38 +1,16 @@
 import pandas as pd
 import numpy as np
-from plotnine import ggplot, aes, geom_histogram, theme_bw, labs, geom_line, theme_minimal, geom_boxplot, facet_wrap
 from IPython.display import display
-
+from plotnine import (
+    ggplot, aes, geom_boxplot, geom_line, geom_point, facet_wrap,
+    labs, theme_minimal, theme, scale_x_discrete, element_text, scale_y_continuous, geom_histogram, theme_bw
+)
 # ==============================================================================================
 # visualize_distributions: Function to visualize scoring distributions
 # ==============================================================================================
 
 def visualize_distributions(scores):
-    """
-    Visualize the distributions of different scoring methods across replications.
 
-    This function generates histogram plots for each method in the `scores` dictionary.
-    Each method will have a single figure, with faceted subplots per replication
-    (e.g., 10 replications arranged in 2 rows of 5 columns).
-
-    Parameters
-    ----------
-    scores : dict
-        Dictionary containing score lists for each method.
-        Keys are method names (str), e.g., "LS", "CLS", "RS", "CS".
-        Values are lists of arrays, where each array corresponds to one replication.
-
-    Returns
-    -------
-    None
-        Displays one faceted histogram plot per method.
-
-    Notes
-    -----
-    - Each histogram shows the distribution of scores for the corresponding replication.
-    - Uses plotnine/ggplot for plotting and automatically reshapes the scores into long format.
-    - Recommended: ensure all replications have the same number of features for consistent plotting.
-    """
     for method, score_list in scores.items():
         rows = []
 
@@ -63,128 +41,189 @@ def visualize_distributions(scores):
         display(p)
 
 
-# ==============================================================================================
-# Function to plot RMSE comparison (line + boxplot)
-# ==============================================================================================
-def plot_rmse_comparison(rmse_dict):
-    """
-    Create line plot and boxplot of RMSE per method across replications.
+def plot_facets_all(results_dict, k_vector, metric="brier"):
 
-    Parameters
-    ----------
-    rmse_dict : dict
-        Keys = method names (str), values = list of RMSE per replication
+    # ============================
+    # 1) Collect data über alle k
+    # ============================
+    rows = []
 
-    Returns
-    -------
-    rmse_df : pd.DataFrame
-        Long-format DataFrame used for plotting
-    p_line : plotnine.ggplot
-        Line plot of RMSE across replications
-    p_box : plotnine.ggplot
-        Boxplot of RMSE distribution per method
-    """
-    # Create DataFrame
-    n_reps = len(next(iter(rmse_dict.values())))
-    rmse_df = pd.DataFrame(rmse_dict)
-    rmse_df["Replication"] = np.arange(1, n_reps + 1)
+    for k in k_vector:
+        if metric == "brier":
+            loss_dict = results_dict[k]["brierloss"]
+        elif metric == "rmse":
+            loss_dict = results_dict[k]["RMSE"]
+        elif metric == "time":
+            loss_dict = results_dict[k]["Time"]
+        else:
+            raise ValueError("metric must be 'brier', 'rmse' or 'time'")
 
-    # Melt into long format
-    rmse_long = rmse_df.melt(
-        id_vars="Replication",
+        n_reps = len(next(iter(loss_dict.values())))
+
+        df = pd.DataFrame(loss_dict)
+        df["Replication"] = np.arange(1, n_reps + 1)
+        df["k"] = k
+
+        rows.append(df)
+
+    loss_all = pd.concat(rows, ignore_index=True)
+
+    loss_long = loss_all.melt(
+        id_vars=["Replication", "k"],
         var_name="Method",
-        value_name="RMSE"
+        value_name="Loss"
     )
 
-    # Line plot
-    p_line = (
-            ggplot(rmse_long, aes(x="Replication", y="RMSE", color="Method"))
-            + geom_line(size=1.2)
-            + theme_minimal()
-            + labs(
-        title="RMSE Comparison Across Methods",
-        x="Replication",
-        y="RMSE"
-    )
-    )
+    loss_long["k"] = loss_long["k"].astype("category")
 
-    # Boxplot
-    p_box = (
-            ggplot(rmse_long, aes(x="Method", y="RMSE", fill="Method"))
-            + geom_boxplot()
-            + theme_minimal()
-            + labs(
-        title="RMSE Distribution per Method",
-        x="Method",
-        y="RMSE"
-    )
-    )
+    metric_name = {
+        "brier": "Brier Score",
+        "rmse": "RMSE",
+        "time": "Score Calculation Time"
+    }[metric]
 
-    # Display plots
-    # display(p_line)
-    display(p_box)
-
-    return rmse_df, p_box
-
-# ==============================================================================================
-# Function to plot RMSE comparison (line + boxplot)
-# ==============================================================================================
-def plot_time_comparison(time_dict):
-    """
-    Create line plot and boxplot of Time per method across replications.
-
-    Parameters
-    ----------
-    time_dict : dict
-        Keys = method names (str), values = list of Time per replication
-
-    Returns
-    -------
-    time_df : pd.DataFrame
-        Long-format DataFrame used for plotting
-    p_line : plotnine.ggplot
-        Line plot of Time across replications
-    p_box : plotnine.ggplot
-        Boxplot of Time distribution per method
-    """
-    # Create DataFrame
-    n_reps = len(next(iter(time_dict.values())))
-    time_df = pd.DataFrame(time_dict)
-    time_df["Replication"] = np.arange(1, n_reps + 1)
-
-    # Melt into long format
-    time_long = time_df.melt(
-        id_vars="Replication",
-        var_name="Method",
-        value_name="Time"
+    # ============================
+    # 2) Facet nach Methode (x = k)
+    # ============================
+    p_method = (
+        ggplot(loss_long, aes(x="k", y="Loss", fill="Method"))
+        + geom_boxplot()
+        + facet_wrap("~ Method", scales="fixed", ncol=2)
+        + theme_minimal()
+        + theme(figure_size=(18, 20))
+        + labs(
+            title=f"{metric_name} per Method across k",
+            x="k",
+            y=metric_name
+        )
     )
 
-    # Line plot
-    p_line = (
-            ggplot(time_long, aes(x="Replication", y="Time", color="Method"))
-            + geom_line(size=1.2)
-            + theme_minimal()
-            + labs(
-        title="Score Calculation Time Comparison Across Methods",
-        x="Replication",
-        y="Score Calculation Time"
-    )
-    )
-
-    # Boxplot
-    p_box = (
-            ggplot(time_long, aes(x="Method", y="Time", fill="Method"))
-            + geom_boxplot()
-            + theme_minimal()
-            + labs(
-        title="Score Calculation Time Distribution per Method",
-        x="Method",
-        y="Score Calculation Time"
-    )
+    # ============================
+    # 3) Facet nach k (x = Methode)
+    # ============================
+    p_k = (
+        ggplot(loss_long, aes(x="Method", y="Loss", fill="Method"))
+        + geom_boxplot()
+        + facet_wrap("~ k", scales="fixed", ncol=2)
+        + theme_minimal()
+        + theme(figure_size=(18, 20))
+        + labs(
+            title=f"{metric_name} per k across Methods",
+            x="Method",
+            y=metric_name
+        )
     )
 
-    # Display plots
-    # display(p_line)
-    display(p_box)
+    display(p_method)
+    display(p_k)
 
-    return time_df, p_box
+def _derive_counts_from_entry(entry):
+
+    sel_cols = entry.get("selected_columns_counts", None)
+    sel_rows = entry.get("selected_rows_counts", None)
+
+    if sel_cols is None and "C" in entry:
+        sel_cols = {}
+        for key, lst in entry["C"].items():
+            method = key.replace("C_", "").upper()
+            sel_cols[method] = [len(d.get("selected_columns", [])) for d in lst]
+
+    if sel_rows is None and "R" in entry:
+        sel_rows = {}
+        for key, lst in entry["R"].items():
+            method = key.replace("R_", "").upper()
+            sel_rows[method] = [len(d.get("selected_rows", [])) for d in lst]
+
+    return sel_cols, sel_rows
+
+def plot_dimension_comparison(results_dict, k_vector, show_median_lines=True, ncol=2):
+
+    # 1) Counts extrahieren und in long DataFrame bringen
+    rows = []
+    for k in k_vector:
+        if k not in results_dict:
+            raise KeyError(f"k={k} nicht in results_dict vorhanden.")
+        entry = results_dict[k]
+        sel_cols, sel_rows = _derive_counts_from_entry(entry)
+        if sel_cols is None:
+            raise ValueError(f"Keine selected_columns_counts oder C für k={k} gefunden.")
+
+        for method, col_counts in sel_cols.items():
+            row_counts = sel_rows.get(method, [np.nan] * len(col_counts)) if sel_rows is not None else [np.nan] * len(col_counts)
+            for rep_idx, (cc, rc) in enumerate(zip(col_counts, row_counts), start=1):
+                rows.append({
+                    "k": int(k),
+                    "k_str": str(k),
+                    "Method": method,
+                    "Replication": rep_idx,
+                    "SelectedColumns": int(cc) if not np.isnan(cc) else np.nan,
+                    "SelectedRows": int(rc) if not np.isnan(rc) else np.nan
+                })
+
+    df_counts = pd.DataFrame(rows)
+    if df_counts.empty:
+        raise ValueError("Keine Counts extrahiert. Prüfe results_dict Struktur.")
+
+    # 2) Ordnung der k-Werte als Strings (für diskrete x-Achse)
+    k_order = sorted(df_counts["k"].unique())
+    k_labels = [str(x) for x in k_order]
+    df_counts["k_str"] = pd.Categorical(df_counts["k_str"], categories=k_labels, ordered=True)
+
+    # 3) Median‑Daten vorbereiten (für Linien)
+    med_cols = (
+        df_counts
+        .groupby(["Method", "k_str"], observed=True)["SelectedColumns"]
+        .median()
+        .reset_index()
+        .rename(columns={"SelectedColumns": "MedianSelectedColumns"})
+    )
+    med_rows = (
+        df_counts
+        .groupby(["Method", "k_str"], observed=True)["SelectedRows"]
+        .median()
+        .reset_index()
+        .rename(columns={"SelectedRows": "MedianSelectedRows"})
+    )
+
+    # 4) Plot für Selected Columns (Boxplot + optionale Medianlinie)
+    p_cols = (
+        ggplot(df_counts, aes(x="k_str", y="SelectedColumns"))
+        + geom_boxplot(aes(fill="Method"))
+        + facet_wrap("~Method", ncol=ncol, scales="fixed")
+        + labs(title="Selected Columns per k and Method", x="k", y="Anzahl ausgewählte Spalten")
+        + theme_minimal()
+        + theme(axis_text_x=element_text(rotation=45, hjust=1))
+    )
+
+    if show_median_lines:
+        # geom_line/point mit eigenem DataFrame; group=1 sorgt für Linien pro Facet
+        p_cols = p_cols + geom_line(
+            data=med_cols, mapping=aes(x="k_str", y="MedianSelectedColumns", group=1),
+            color="orange", size=1
+        ) + geom_point(
+            data=med_cols, mapping=aes(x="k_str", y="MedianSelectedColumns"),
+            color="orange", size=2
+        )
+
+    # 5) Plot für Selected Rows
+    p_rows = (
+        ggplot(df_counts, aes(x="k_str", y="SelectedRows"))
+        + geom_boxplot(aes(fill="Method"))
+        + facet_wrap("~Method", ncol=ncol, scales="fixed")
+        + labs(title="Selected Rows per k and Method", x="k", y="Anzahl ausgewählte Zeilen")
+        + theme_minimal()
+        + theme(axis_text_x=element_text(rotation=45, hjust=1))
+    )
+
+    if show_median_lines:
+        p_rows = p_rows + geom_line(
+            data=med_rows, mapping=aes(x="k_str", y="MedianSelectedRows", group=1),
+            color="darkgreen", size=1
+        ) + geom_point(
+            data=med_rows, mapping=aes(x="k_str", y="MedianSelectedRows"),
+            color="darkgreen", size=2
+        )
+
+    # 6) Display und Rückgabe
+    display(p_cols)
+    display(p_rows)
