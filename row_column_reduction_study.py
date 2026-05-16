@@ -15,27 +15,27 @@ from visualizations import *
 def row_reduction(k, X, y, gaussian = False):
     X = X.to_numpy() if isinstance(X, pd.DataFrame) else X
 
-    # define dimensionality
+    # define dimensionality of the data matrix
     n, d = X.shape
 
-    # number of rows in sketch
+    # number of rows in sketch given by the optimal sketching bound paper as a variation of the upper bound for L2 regression
     r = int(np.ceil(k * np.log(d)))
 
-    # y preparation
+    # preparation of the sketched y vector
     y_reduced = np.zeros((r, 1)) if y is not None else None
     y = y.to_numpy().reshape(-1, 1) if isinstance(y, (pd.Series, pd.DataFrame)) else y.reshape(-1, 1)
 
-    # prepare sketched matrix
+    # prepare the sketched matrix with reduced number of rows r
     R = np.zeros((r,d))
 
-    # created the sketched versions of X and y
+    # created the sketched versions of X and y iteratively (keeping the comp effort low - matrix mults.)
     if r <  n:
         for i in range(n):
             if gaussian:
                 # Gaussian sketching vector (r x 1)
                 sketch_vec = np.random.randn(r, 1)
             else:
-                # Rademacher sketching vector (r x 1)
+                # Rademacher sketching vector (r x 1) -> important: scaling by factor sqrt(r)
                 sketch_vec = np.random.choice([-1,1], size=(r,1)) / np.sqrt(r)
 
             # Reduce X: Outer product: (r x 1) @ (1 x d) -> (r x d)
@@ -45,30 +45,34 @@ def row_reduction(k, X, y, gaussian = False):
             if y is not None:
                 y_reduced += sketch_vec * y[i]
     else:
+        # case when now reduction is needed
         R = X
         y_reduced  = y
 
     return R, y_reduced
 
 def column_reduction(R, scores, k):
-    # get dimensions
-    n, p = np.shape(R)
-    # get probabilities
+
+    # get the dimensions of the row-reduced matrix R
+    r,d = np.shape(R)
+
+    # get probabilities by normalizing the scores
     probs = scores / np.sum(scores)
 
-    # get the number of desired columns
+    # get the number of desired columns from CUR paper by assuming the matrix R is given
     c = int(np.ceil(k * np.log(k)))
 
     # scale probs and set maximum to 1
     scaled_probs = np.minimum(c * probs, 1)
 
-    # sample the columns and fill S and D
+    # initialize the sampling matrix S and rescaling matrix D
     t = 0
     sampled_cols = []
     S_cols = []
     D_diag = []
 
-    for j in range(p):
+    # sample the columns through uniform random variable -> EXPECTED(c) algorithm
+    for j in range(d):
         z = np.random.uniform(0, 1)
         if z <= scaled_probs[j]:
             sampled_cols.append(j)
@@ -76,16 +80,16 @@ def column_reduction(R, scores, k):
             D_diag.append(1 / np.sqrt(scaled_probs[j]))
             t += 1
 
-    # create S and D
+    # create S and D in matrix form
     t = len(sampled_cols)
-    S = np.zeros((p, t))
+    S = np.zeros((d, t))
     D = np.zeros((t, t))
 
     for idx, j in enumerate(sampled_cols):
         S[j, idx] = 1
         D[idx, idx] = D_diag[idx]
 
-    # get C
+    # determine C as final matrix
     R = np.array(R)
     C = R @ S @ D
 
@@ -166,66 +170,6 @@ def data_reduction(k, df_train, y_train, gaussian = False):
 
     return scores, timing_scores, C, R_reduced, y_reduced
 
-def fit_lasso_with_k_features(R, y, k, alphas=None):
-    from sklearn.linear_model import Lasso
-    if alphas is None:
-        alphas = np.logspace(-4, 1, 50)  # von schwach → stark regularisiert
-
-    scaler = StandardScaler()
-    R_scaled = scaler.fit_transform(R)
-
-    best_model = None
-    best_alpha = None
-    best_diff = np.inf
-    best_n_features = None
-
-    for alpha in alphas:
-        model = Lasso(alpha=alpha, max_iter=10000)
-        model.fit(R_scaled, y)
-
-        n_features = np.sum(model.coef_ != 0)
-        diff = abs(n_features - k)
-
-        if diff < best_diff:
-            best_diff = diff
-            best_model = model
-            best_alpha = alpha
-            best_n_features = n_features
-
-    return best_model, scaler, best_alpha, best_n_features
-
-
-def lasso_k_modeling(R_reduced, df_test, y_test, y_reduced, k):
-
-    rmse_lasso = []
-    selected_features = []
-    beta_lasso = []  # <--- NEU
-
-    for i in range(len(R_reduced)):
-
-        R = R_reduced[i]
-        y_r = y_reduced[i].ravel()
-
-        # --- Fit mit Ziel: k Features ---
-        model, scaler, alpha, n_feat = fit_lasso_with_k_features(R, y_r, k)
-
-        selected_features.append(n_feat)
-
-        # --- Beta speichern ---
-        beta_lasso.append(model.coef_)  # <--- DAS IST DEIN FINALER VEKTOR
-
-        # --- Test ---
-        X_test = df_test[i].to_numpy()
-        X_test_scaled = scaler.transform(X_test)
-
-        preds = model.predict(X_test_scaled)
-
-        rmse = np.sqrt(mean_squared_error(y_test[i], preds))
-        rmse_lasso.append(rmse)
-
-    return rmse_lasso, selected_features, beta_lasso
-
-
 def linear_modeling(C, R, df_test, y_test, y_reduced):
 
     # Fit linear models to the reduced data matrix
@@ -289,29 +233,6 @@ def linear_modeling(C, R, df_test, y_test, y_reduced):
 # Full Model: Application of Linear Model to the optimal set of columns
 # ==============================================================================================
 def compute_full_rmse(df_train, df_test, y_train, y_test, base, folder):
-    """
-    Compute RMSE per replication for the Full Model using the true beta selection.
-
-    Parameters
-    ----------
-    df_train : list of pd.DataFrame
-        Training datasets per replication
-    df_test : list of pd.DataFrame
-        Test datasets per replication
-    y_train : list of arrays
-        Training targets per replication
-    y_test : list of arrays
-        Test targets per replication
-    base : str
-        Base path to replication folders
-    folder : str
-        Folder name inside base containing the beta.csv files
-
-    Returns
-    -------
-    rmse_full : list of float
-        RMSE per replication
-    """
     rmse_full = []
 
     for i in range(len(df_train)):
@@ -344,46 +265,6 @@ def compute_full_rmse(df_train, df_test, y_train, y_test, base, folder):
     return rmse_full
 
 def apply_col_after_row_reduction(k, seed, base, folder, reps, gaussian = False):
-    """
-    Conduct a full simulation study: data load, reduction, modeling, and RMSE evaluation.
-
-    This function performs the complete workflow of the simulation study:
-    1. Load training and test data for multiple replications.
-    2. Set random seeds for reproducibility.
-    3. Perform data reduction using multiple scoring methods.
-    4. Fit linear models on reduced datasets and compute RMSE.
-    5. Fit the Full Model on true selected features and compute RMSE.
-
-    Parameters
-    ----------
-    k : int
-        Number of features/columns to select per reduction step.
-    seed : int
-        Seed for reproducibility (affects Python random and NumPy random).
-    folder : str
-        Folder name containing the simulation data files for all replications.
-    reps : int
-        Number of replications to process.
-
-    Returns
-    -------
-    scores : dict
-        Dictionary of scores per method and replication, output from `data_reduction`.
-    C : dict
-        Dictionary of column-reduced data per method, output from `data_reduction`.
-    R : dict
-        Dictionary of row-reduced data per method, output from `data_reduction`.
-    rmse : dict
-        Dictionary of RMSE per method, including the Full Model.
-
-    Notes
-    -----
-    - Assumes that the CSV files are stored under `base/folder/rep{i}/` with names:
-      'X_train.csv', 'X_test.csv', 'y_train.csv', 'y_test.csv'.
-    - The Full Model uses the true beta selection stored in beta.csv in each replication folder.
-    - Random seeds are set for both Python's `random` and NumPy's `np.random` to ensure reproducibility.
-    - RMSE plotting is performed using `plot_rmse_comparison`.
-    """
     ## 1. Data Load
     # initialize lists to store data
     df_train = []
@@ -420,13 +301,6 @@ def apply_col_after_row_reduction(k, seed, base, folder, reps, gaussian = False)
     ## 4. Linear Modeling
     rmse = linear_modeling(C, R_reduced, df_test, y_test, y_reduced)
 
-    print("Running Lasso (Shrinkage baseline)...")
-    ## 5. Lasso Modeling
-    rmse_lasso, lasso_features, beta_lasso = lasso_k_modeling(
-        R_reduced, df_test, y_test, y_reduced, k
-    )
-
-    rmse["Lasso"] = rmse_lasso
 
     print("Building Full Model / Benchmark...")
     ## 6. Full Model
@@ -435,4 +309,4 @@ def apply_col_after_row_reduction(k, seed, base, folder, reps, gaussian = False)
 
     print("Data Reduction & Modeling completed.")
 
-    return scores, timing_scores, C, R_reduced, rmse, beta_lasso, lasso_features
+    return scores, timing_scores, C, R_reduced, rmse
