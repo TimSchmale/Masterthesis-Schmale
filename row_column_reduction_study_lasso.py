@@ -49,14 +49,17 @@ def row_reduction(k, X, y, gaussian = False):
     return R, y_reduced
 
 def fit_theoretical_lasso(R,y,k):
+    # calculate the theoretical lambda derived from optimal sketching bounds paper
     alpha = 1/np.sqrt(k)
 
     scaler = StandardScaler()
     R_scaled = scaler.fit_transform(R)
 
+    # fit Lasso model
     model = Lasso(alpha=alpha, max_iter=10000)
     model.fit(R_scaled, y)
 
+    # get the number of nonzero coefficients
     n_features = np.sum(model.coef_ != 0)
 
     return model, scaler, n_features
@@ -66,12 +69,14 @@ def fit_lasso_k_binary(R, y, k, max_iter=30):
     scaler = StandardScaler()
     R_scaled = scaler.fit_transform(R)
 
+    # define the grid lambda / alpha is searched in
     alpha_low, alpha_high = 1e-6, 1e2
     best_model = None
     best_diff = np.inf
     best_alpha = None
     best_n_features = None
 
+    # perform a binary search inside of grid to get the best suited lambda / alpha
     for _ in range(max_iter):
         alpha_mid = np.sqrt(alpha_low * alpha_high)
         model = Lasso(alpha=alpha_mid, max_iter=10000)
@@ -97,6 +102,7 @@ def fit_lasso_k_binary(R, y, k, max_iter=30):
 
 def lasso_modeling(R_reduced, df_test, y_test, y_reduced, k):
 
+    # initialize all different lists
     rmse_theoretical = []
     rmse_binary = []
 
@@ -113,14 +119,13 @@ def lasso_modeling(R_reduced, df_test, y_test, y_reduced, k):
         R = R_reduced[i]
         y_r = y_reduced[i].ravel()
 
-        # ---------------------------------------------------------
-        # 1) THEORETISCHES LASSO
-        # ---------------------------------------------------------
+        # theoretic Lasso fit
         model_t, scaler_t, n_feat_t = fit_theoretical_lasso(R, y_r, k)
 
         selected_features_theoretical.append(n_feat_t)
         beta_theoretical.append(model_t.coef_)
 
+        # test procedure
         X_test = df_test[i].to_numpy()
         X_test_scaled_t = scaler_t.transform(X_test)
         preds_t = model_t.predict(X_test_scaled_t)
@@ -128,15 +133,14 @@ def lasso_modeling(R_reduced, df_test, y_test, y_reduced, k):
         rmse_t = np.sqrt(mean_squared_error(y_test[i], preds_t))
         rmse_theoretical.append(rmse_t)
 
-        # ---------------------------------------------------------
-        # 2) BINÄRE SUCHE LASSO
-        # ---------------------------------------------------------
+        # binary Lasso fit
         model_b, scaler_b, alpha_b, n_feat_b = fit_lasso_k_binary(R, y_r, k)
         alpha_binary.append(alpha_b)
 
         selected_features_binary.append(n_feat_b)
         beta_binary.append(model_b.coef_)
 
+        # test procedure
         X_test_scaled_b = scaler_b.transform(X_test)
         preds_b = model_b.predict(X_test_scaled_b)
 
@@ -155,12 +159,6 @@ def lasso_modeling(R_reduced, df_test, y_test, y_reduced, k):
 
 
 def apply_lasso_after_row_reduction(k, seed, base, folder, reps, gaussian=False):
-    """
-    Full simulation pipeline:
-    1. Load data
-    2. Row reduction
-    3. Lasso (theoretical + binary)
-    """
 
     # ---------------------------------------------------------
     # 1. Load Data
