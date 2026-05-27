@@ -1,113 +1,110 @@
 import numpy as np
-import pandas as pd
 
 # ------------------------------------------------------------
 # Function to generate a random score (uniformly distributed) per column
 #
 # INPUT:
-#   X         : design matrix of dimension n x p
+#   X : design matrix of dimension n x p
 #
 # OUTPUT:
 #   Numeric vector of length p containing random scores between 0 and 1
 # ------------------------------------------------------------
 def get_random_scores(X):
     n_cols = X.shape[1]
-    return np.random.uniform(0, 1, size=n_cols)
+    return np.random.uniform(0.0, 1.0, size=n_cols)
 
 # ------------------------------------------------------------
-# Function to compute Leverage Scores (LS) for the case n<p
+# Function to compute Column Leverage Scores (LS) for the case n < p
 #
 # INPUT:
-#   X         : design matrix of dimension n x p
-#   k         : desired rank of final approximation
+#   X : design matrix of dimension n x p
+#   k : desired rank of final approximation (k ≤ min(n,p))
 #
 # OUTPUT:
 #   Numeric vector of length p containing the LS values
 # ------------------------------------------------------------
 def get_column_leverage_scores(X, k):
-    # check k
-    if k > min(X.shape):
-        print(k, X.shape[0])
-        raise ValueError("k must be <= min(n,p)")
-
-    # perform singular value decomposition to get V matrix
-    U, S, Vh = np.linalg.svd(X, full_matrices=False)
-
-    return np.sum(Vh.T[:,0:k] ** 2, axis = 1)
-
-def get_row_leverage_scores(X, k):
-
     n, p = X.shape
-    if k > min(n,p):
+    if k > min(n, p):
         raise ValueError("k must be <= min(n,p)")
 
     U, S, Vh = np.linalg.svd(X, full_matrices=False)
+    V = Vh.T[:, :k]
 
-    return np.sum(U[:, 0:k]**2, axis=1)
-
-def get_log_reg_leverage_scores(X: np.ndarray, p=1):
-    """
-        Computes leverage scores.
-    """
-    if not len(X.shape) == 2:
-        raise ValueError("X must be 2D!")
-
-    Q, *_ = np.linalg.qr(X)
-
-    leverage_scores = np.power(np.linalg.norm(Q, axis=1, ord=p), p)
-
-    return leverage_scores
+    return np.sum(V * V, axis=1)
 
 # ------------------------------------------------------------
-# Function to compute Column Cross Leverage Scores (CLS) for the case n<p
+# Function to compute Row Leverage Scores (LS)
 #
 # INPUT:
-#   X         : design matrix of dimension n x p
-#   y         : response vector of length n
+#   X : design matrix of dimension n x p
+#   k : desired rank of final approximation
+#
+# OUTPUT:
+#   Numeric vector of length n containing the LS values
+# ------------------------------------------------------------
+def get_row_leverage_scores(X, k):
+    n, p = X.shape
+    if k > min(n, p):
+        raise ValueError("k must be <= min(n,p)")
+
+    U, S, Vh = np.linalg.svd(X, full_matrices=False)
+    return np.sum(U[:, :k] ** 2, axis=1)
+
+# ------------------------------------------------------------
+# Function to compute L_p leverage-like scores via QR decomposition
+#
+# INPUT:
+#   X : design matrix of dimension n x p
+#   p : norm parameter (default p = 1)
+#
+# OUTPUT:
+#   Numeric vector of length n containing ||Q[i,:]||_p^p
+# ------------------------------------------------------------
+def get_log_reg_leverage_scores(X, p=1):
+    if X.ndim != 2:
+        raise ValueError("X must be 2D!")
+
+    Q, _ = np.linalg.qr(X, mode="reduced")
+    return np.linalg.norm(Q, ord=p, axis=1) ** p
+
+# ------------------------------------------------------------
+# Function to compute Column Cross Leverage Scores (CLS)
+#
+# INPUT:
+#   X : design matrix of dimension n x p
+#   y : response vector of length n
 #
 # OUTPUT:
 #   Numeric vector of length p containing the CLS values
 # ------------------------------------------------------------
 def get_cross_leverage_scores(X, y):
+    y = y.reshape(-1, 1) if isinstance(y, np.ndarray) else y
+    X_tilde = np.concatenate([X, y], axis=1)
 
-    if isinstance(X, np.ndarray):
-        X = pd.DataFrame(X)
+    if X_tilde.shape[0] < X_tilde.shape[1]:
+        X_tilde = X_tilde.T
 
-    if isinstance(y, np.ndarray):
-        y = pd.DataFrame(y)
-
-    XY = pd.concat([X, y], axis=1)
-
-    if XY.shape[0] < XY.shape[1]:
-        C = XY.T
-    else:
-        C = XY
-
-    Q, R = np.linalg.qr(C, mode="reduced")
-
-    cls = Q[:-1, :] @ Q[-1, :]
-
-    return cls
+    Q, R = np.linalg.qr(X_tilde, mode="reduced")
+    return Q[:-1, :] @ Q[-1, :]
 
 # ------------------------------------------------------------
-# Function to compute Column Cross Leverage Scores (CLS) for the case n<p
+# Function to compute combined LS + CLS scores
 #
 # INPUT:
-#   X         : design matrix of dimension n x p
-#   y         : response vector of length n
-#   k         : desired rank of final approximation
-#   p_leverage: percentage of leverage scores in calculation of combined scores
+#   X          : design matrix of dimension n x p
+#   y          : response vector of length n
+#   k          : rank parameter for LS
+#   p_leverage : weight for leverage scores in [0,1]
+#
 # OUTPUT:
-#   Numeric vector of length p containing the combined score values
+#   Numeric vector of length p containing combined scores
 # ------------------------------------------------------------
 def get_combined_scores(X, y, k, p_leverage):
-
-    # calculate leverage scores and normalize to 1
     ls = get_column_leverage_scores(X, k)
-    ls = ls / np.sqrt(np.sum(ls ** 2))
+    ls = ls / np.linalg.norm(ls)
 
-    # calculate cross leverage scores and normalize to 1
     cls = np.abs(get_cross_leverage_scores(X, y))
-    cls = cls / np.sqrt(np.sum(cls ** 2))
+    cls = cls / np.linalg.norm(cls)
 
-    return (1-p_leverage) * cls + p_leverage * ls
+    return (1 - p_leverage) * cls + p_leverage * ls
