@@ -1,29 +1,50 @@
 import numpy as np
 
-# ------------------------------------------------------------
-# Function to generate a random score (uniformly distributed) per column
-#
-# INPUT:
-#   X : design matrix of dimension n x p
-#
-# OUTPUT:
-#   Numeric vector of length p containing random scores between 0 and 1
-# ------------------------------------------------------------
 def get_random_scores(X):
+    """
+    Generate uniformly random column scores.
+
+    A random score in [0,1] is assigned independently to each column
+    of the design matrix. This baseline scoring method is used as a
+    non-informative reference in reduction pipelines.
+
+    Parameters
+    ----------
+    X : array-like
+        Design matrix of shape (n, p).
+
+    Returns
+    -------
+    ndarray
+        Vector of length p containing random scores.
+    """
+
     n_cols = X.shape[1]
     return np.random.uniform(0.0, 1.0, size=n_cols)
 
-# ------------------------------------------------------------
-# Function to compute Column Leverage Scores (LS) for the case n < p
-#
-# INPUT:
-#   X : design matrix of dimension n x p
-#   k : desired rank of final approximation (k ≤ min(n,p))
-#
-# OUTPUT:
-#   Numeric vector of length p containing the LS values
-# ------------------------------------------------------------
+
 def get_column_leverage_scores(X, k):
+    """
+    Compute column leverage scores using the top-k right singular vectors.
+
+    The design matrix X is decomposed via thin SVD. The leverage score
+    of column j is the squared Euclidean norm of the j-th row of V_k,
+    where V_k contains the top-k right singular vectors. These scores
+    quantify the influence of each column on the row space of X.
+
+    Parameters
+    ----------
+    X : array-like
+        Design matrix of shape (n, p).
+    k : int
+        Target rank, must satisfy k ≤ min(n, p).
+
+    Returns
+    -------
+    ndarray
+        Vector of length p containing column leverage scores.
+    """
+
     n, p = X.shape
     if k > min(n, p):
         raise ValueError("k must be <= min(n,p)")
@@ -33,17 +54,28 @@ def get_column_leverage_scores(X, k):
 
     return np.sum(V * V, axis=1)
 
-# ------------------------------------------------------------
-# Function to compute Row Leverage Scores (LS)
-#
-# INPUT:
-#   X : design matrix of dimension n x p
-#   k : desired rank of final approximation
-#
-# OUTPUT:
-#   Numeric vector of length n containing the LS values
-# ------------------------------------------------------------
 def get_row_leverage_scores(X, k):
+    """
+    Compute row leverage scores using the top-k left singular vectors.
+
+    The leverage score of row i is the squared Euclidean norm of the
+    i-th row of U_k, where U_k contains the top-k left singular vectors.
+    These scores quantify the influence of each row on the column space
+    of X.
+
+    Parameters
+    ----------
+    X : array-like
+        Design matrix of shape (n, p).
+    k : int
+        Target rank, must satisfy k ≤ min(n, p).
+
+    Returns
+    -------
+    ndarray
+        Vector of length n containing row leverage scores.
+    """
+
     n, p = X.shape
     if k > min(n, p):
         raise ValueError("k must be <= min(n,p)")
@@ -51,34 +83,57 @@ def get_row_leverage_scores(X, k):
     U, S, Vh = np.linalg.svd(X, full_matrices=False)
     return np.sum(U[:, :k] ** 2, axis=1)
 
-# ------------------------------------------------------------
-# Function to compute L_p leverage-like scores via QR decomposition
-#
-# INPUT:
-#   X : design matrix of dimension n x p
-#   p : norm parameter (default p = 1)
-#
-# OUTPUT:
-#   Numeric vector of length n containing ||Q[i,:]||_p^p
-# ------------------------------------------------------------
+
 def get_log_reg_leverage_scores(X, p=1):
+    """
+    Compute L_p leverage-like scores using the QR decomposition.
+
+    The reduced QR factorization X = QR is computed. The leverage-like
+    score of row i is defined as ||Q[i,:]||_p^p. For p = 1, this yields
+    the ℓ₁-based leverage scores used in logistic coreset constructions.
+
+    Parameters
+    ----------
+    X : array-like
+        Design matrix of shape (n, p).
+    p : int or float
+        Norm parameter for the row-wise ℓ_p norm.
+
+    Returns
+    -------
+    ndarray
+        Vector of length n containing leverage-like scores.
+    """
+
     if X.ndim != 2:
         raise ValueError("X must be 2D!")
 
     Q, _ = np.linalg.qr(X, mode="reduced")
     return np.linalg.norm(Q, ord=p, axis=1) ** p
 
-# ------------------------------------------------------------
-# Function to compute Column Cross Leverage Scores (CLS)
-#
-# INPUT:
-#   X : design matrix of dimension n x p
-#   y : response vector of length n
-#
-# OUTPUT:
-#   Numeric vector of length p containing the CLS values
-# ------------------------------------------------------------
+
 def get_cross_leverage_scores(X, y):
+    """
+    Compute column cross-leverage scores between X and the response y.
+
+    The augmented matrix [X | y] is formed and QR-decomposed. The
+    cross-leverage score for column j is the inner product between
+    the j-th row of Q and the final row of Q. These scores quantify
+    the alignment between each column of X and the response vector.
+
+    Parameters
+    ----------
+    X : array-like
+        Design matrix of shape (n, p).
+    y : array-like
+        Response vector of length n.
+
+    Returns
+    -------
+    ndarray
+        Vector of length p containing cross-leverage scores.
+    """
+
     y = y.reshape(-1, 1) if isinstance(y, np.ndarray) else y
     X_tilde = np.concatenate([X, y], axis=1)
 
@@ -88,19 +143,32 @@ def get_cross_leverage_scores(X, y):
     Q, R = np.linalg.qr(X_tilde, mode="reduced")
     return Q[:-1, :] @ Q[-1, :]
 
-# ------------------------------------------------------------
-# Function to compute combined LS + CLS scores
-#
-# INPUT:
-#   X          : design matrix of dimension n x p
-#   y          : response vector of length n
-#   k          : rank parameter for LS
-#   p_leverage : weight for leverage scores in [0,1]
-#
-# OUTPUT:
-#   Numeric vector of length p containing combined scores
-# ------------------------------------------------------------
+
 def get_combined_scores(X, y, k, p_leverage):
+    """
+    Compute combined column scores using LS and CLS components.
+
+    Column leverage scores (LS) and cross-leverage scores (CLS) are
+    normalized and combined via a convex mixture. The parameter
+    p_leverage ∈ [0,1] controls the relative weight of LS versus CLS.
+
+    Parameters
+    ----------
+    X : array-like
+        Design matrix of shape (n, p).
+    y : array-like
+        Response vector of length n.
+    k : int
+        Rank parameter for LS computation.
+    p_leverage : float
+        Weight for leverage scores in the convex combination.
+
+    Returns
+    -------
+    ndarray
+        Vector of length p containing combined scores.
+    """
+
     ls = get_column_leverage_scores(X, k)
     ls = ls / np.linalg.norm(ls)
 
