@@ -1,345 +1,390 @@
 import pandas as pd
 import numpy as np
 import random
-from scoring_functions import get_column_leverage_scores, get_row_leverage_scores, get_random_scores, get_combined_scores, get_cross_leverage_scores
+import gc
+from scoring_functions import (
+    get_column_leverage_scores,
+    get_row_leverage_scores,
+    get_random_scores,
+    get_combined_scores,
+    get_cross_leverage_scores
+)
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error
 import time
-from visualizations import *
 
+# ------------------------------------------------------------
+# Function to perform Column Reduction using EXPECTED(c)
+#
+# INPUT:
+#   X      : design matrix of dimension n x p
+#   scores : numeric vector of length p containing column scores
+#   k      : target rank for CUR approximation
+#
+# OUTPUT:
+#   Dictionary with:
+#       "C"               : reduced matrix of dimension n x t
+#       "selected_columns": list of selected column indices
+#
+# Description:
+#   Implements the EXPECTED(c) column sampling algorithm from the
+#   CUR decomposition. Columns are sampled independently using
+#   scaled probabilities and rescaled according to the theorem.
+# ------------------------------------------------------------
 def column_reduction(X, scores, k):
 
-    # determine the dimensions of the data matrix
-    n, d = np.shape(X)
-    # get probabilities
-    probs = scores / np.sum(scores)
+    # convert to numpy for speed
+    X = np.asarray(X)
+    n, p = X.shape
 
-    # get the number of required columns according to CUR theorem
+    # sampling probabilities
+    probs = scores / scores.sum()
+
+    # number of expected sampled columns
     c = int(np.ceil(k * np.log(k)))
 
-    # scale probs and set maximum possible probability to 1
+    # scaled probabilities (Bernoulli sampling)
     scaled_probs = np.minimum(c * probs, 1)
 
-    # initialize sampling matrix S and rescaling matrix D
-    t = 0
-    sampled_cols = []
-    D_diag = []
+    # Bernoulli draws
+    z = np.random.rand(p)
+    sampled = np.where(z <= scaled_probs)[0]
 
-    # EXPECTED(c) column algorithm
-    for j in range(d):
-        # draw a uniform value and compare the probability against it
-        z = np.random.uniform(0, 1)
-        if z <= scaled_probs[j]:
-            # fill rescaling and sampling matrix components as defined in algorithm
-            sampled_cols.append(j)
-            D_diag.append(1 / np.sqrt(scaled_probs[j]))
-            t += 1
+    # fallback: ensure at least one column
+    if len(sampled) == 0:
+        sampled = np.array([np.argmax(scaled_probs)])
 
-    # create S and D in matrix form
-    t = len(sampled_cols)
-    S = np.zeros((d, t))
-    D = np.zeros((t, t))
-    for idx, j in enumerate(sampled_cols):
-        S[j, idx] = 1
-        D[idx, idx] = D_diag[idx]
+    # rescaling factors
+    D_inv = 1 / np.sqrt(scaled_probs[sampled])
 
-    # calculate C according to CUR paper as S and D are now given
-    X = np.array(X)
-    C = X @ S @ D
+    # reduced matrix C = X[:, sampled] * D
+    C = X[:, sampled] * D_inv
 
     return {
         "C": C,
-        "selected_columns": sampled_cols,
-        "probs": scaled_probs
+        "selected_columns": sampled.tolist()
     }
 
+# ------------------------------------------------------------
+# Function to perform Row Reduction using EXPECTED(r)
+#
+# INPUT:
+#   C : reduced column matrix of dimension n x c
+#   y : response vector of length n
+#   k : target rank for CUR approximation
+#
+# OUTPUT:
+#   Dictionary with:
+#       "R"            : reduced matrix of dimension t x c
+#       "y"            : reduced response vector of length t
+#       "selected_rows": list of selected row indices
+#
+# Description:
+#   Implements the EXPECTED(r) row sampling algorithm from CUR.
+#   Rows are sampled independently using scaled row leverage
+#   probabilities and rescaled accordingly.
+# ------------------------------------------------------------
 def row_reduction(C, y, k):
 
-    # get dimensions of the reduced data matrix
-    n, c = np.shape(C)
+    # convert to numpy
+    C = np.asarray(C)
+    y = np.asarray(y).reshape(-1)
 
-    # get the row leverage scores
+    n, c = C.shape
+
+    # compute row leverage scores
     scores = get_row_leverage_scores(C, k)
 
-    # determine the probabilities
-    probs = scores / np.sum(scores)
+    # sampling probabilities
+    probs = scores / scores.sum()
 
-    # get the number of required rows according to the CUR theorem
+    # expected number of sampled rows
     r = int(np.ceil(c * np.log(c)))
 
-    # scale probs and set their maximum to 1
+    # scaled probabilities
     scaled_probs = np.minimum(r * probs, 1)
 
-    # initialize sampling matrix S and rescaling matrix D
-    t = 0
-    sampled_rows = []
-    D_diag = []
+    # Bernoulli sampling
+    z = np.random.rand(n)
+    sampled = np.where(z <= scaled_probs)[0]
 
-    # EXPECTED(r) row algorithm
-    for i in range(n):
-        z = np.random.uniform(0, 1)
-        if z <= scaled_probs[i]:
-            sampled_rows.append(i)
-            D_diag.append(1 / np.sqrt(scaled_probs[i]))
-            t += 1
+    # fallback: ensure at least one row
+    if len(sampled) == 0:
+        sampled = np.array([np.argmax(scaled_probs)])
 
-    # create S and D in matrix form
-    t = len(sampled_rows)
-    S = np.zeros((n, t))
-    D = np.zeros((t, t))
+    # rescaling factors
+    D_inv = 1 / np.sqrt(scaled_probs[sampled])
 
-    for idx, i in enumerate(sampled_rows):
-        S[i, idx] = 1
-        D[idx, idx] = D_diag[idx]
+    # reduced matrix R = D * C[sampled, :]
+    R = C[sampled, :] * D_inv[:, None]
 
-    # determine C according to the CUR paper
-    C = np.array(C)
-    R = D @ S.T @ C
+    # reduced response
+    y_reduced = y[sampled]
 
-    #print(f"k = {k} resulting in shape(C): {np.shape(R)}")
-
-    # get the reduced y
-    y_reduced = y.iloc[sampled_rows]
     return {
         "R": R,
         "y": y_reduced,
-        "selected_rows": sampled_rows,
-        "probs": scaled_probs
+        "selected_rows": sampled.tolist()
     }
 
-def data_reduction(k, df_train, y_train, row_reduce = True):
-    # 1. Perform the score calculations
-    column_ls = []
-    column_cls = []
-    column_rs = []
-    column_cs = []
 
-    time_ls = []
-    time_cls = []
-    time_rs = []
-    time_cs = []
-    for i in range(len(df_train)):
+# ------------------------------------------------------------
+# Function to perform full data reduction (column + optional row)
+#
+# INPUT:
+#   k          : target rank for CUR approximation
+#   df_train   : list of training matrices (each n x p)
+#   y_train    : list of response vectors
+#   row_reduce : boolean, whether row reduction should be applied
+#
+# OUTPUT:
+#   scores       : dict with score vectors per method and replication
+#   time_scores  : dict with score computation times
+#   C            : dict with selected columns per method
+#   R            : dict with selected rows per method (or None)
+#
+# Description:
+#   Computes LS, CLS, RS, CS scores for each replication, performs
+#   EXPECTED(c) column reduction, and optionally EXPECTED(r) row
+#   reduction. Returns only the structures needed for evaluation.
+# ------------------------------------------------------------
+def data_reduction(k, df_train, y_train, row_reduce=True):
+
+    n_reps = len(df_train)
+
+    # initialize score containers
+    scores = {"LS": [], "CLS": [], "RS": [], "CS": []}
+    time_scores = {"LS": [], "CLS": [], "RS": [], "CS": []}
+
+    # -------------------------------
+    # 1) Score calculation
+    # -------------------------------
+    for i in range(n_reps):
+        X = df_train[i].to_numpy()
+        y = y_train[i].to_numpy().reshape(-1)
+
+        # LS
         start = time.perf_counter()
-        column_ls.append(get_column_leverage_scores(df_train[i], k))
-        time_ls.append(time.perf_counter() - start)
+        scores["LS"].append(get_column_leverage_scores(X, k))
+        time_scores["LS"].append(time.perf_counter() - start)
 
+        # CLS
         start = time.perf_counter()
-        column_cls.append(get_cross_leverage_scores(df_train[i], y_train[i]))
-        time_cls.append(time.perf_counter() - start)
+        scores["CLS"].append(get_cross_leverage_scores(X, y))
+        time_scores["CLS"].append(time.perf_counter() - start)
 
+        # RS
         start = time.perf_counter()
-        column_rs.append(get_random_scores(df_train[i]))
-        time_rs.append(time.perf_counter() - start)
+        scores["RS"].append(get_random_scores(X))
+        time_scores["RS"].append(time.perf_counter() - start)
 
+        # CS
         start = time.perf_counter()
-        column_cs.append(get_combined_scores(df_train[i], y_train[i], k, p_leverage=0.2))
-        time_cs.append(time.perf_counter() - start)
+        scores["CS"].append(get_combined_scores(X, y, k, p_leverage=0.2))
+        time_scores["CS"].append(time.perf_counter() - start)
 
-    timing_scores = {
-        "LS": time_ls,
-        "CLS": time_cls,
-        "RS": time_rs,
-        "CS": time_cs
-    }
-    scores = {
-        "LS": column_ls,
-        "CLS": column_cls,
-        "RS": column_rs,
-        "CS": column_cs
-    }
+        del X, y
+        gc.collect()
 
-    # 2. Calculation of column reduction
-    C_ls = []
-    C_cls = []
-    C_rs = []
-    C_cs = []
+    # -------------------------------
+    # 2) Column reduction
+    # -------------------------------
+    C = {"LS": [], "CLS": [], "RS": [], "CS": []}
 
-    for i in range(len(df_train)):
-        C_ls.append(column_reduction(df_train[i], column_ls[i], k))
-        C_cls.append(column_reduction(df_train[i], np.abs(column_cls[i]), k))
-        C_rs.append(column_reduction(df_train[i], column_rs[i], k))
-        C_cs.append(column_reduction(df_train[i], column_cs[i], k))
+    for i in range(n_reps):
+        X = df_train[i].to_numpy()
 
-    C = {
-        "C_ls": C_ls,
-        "C_cls": C_cls,
-        "C_rs": C_rs,
-        "C_cs": C_cs
-    }
+        C["LS"].append(column_reduction(X, scores["LS"][i], k))
+        C["CLS"].append(column_reduction(X, np.abs(scores["CLS"][i]), k))
+        C["RS"].append(column_reduction(X, scores["RS"][i], k))
+        C["CS"].append(column_reduction(X, scores["CS"][i], k))
 
+        del X
+        gc.collect()
+
+    # -------------------------------
+    # 3) Row reduction (optional)
+    # -------------------------------
+    R = None
     if row_reduce:
-        # 3. Calculation of row reduction
-        R_ls = []
-        R_cls = []
-        R_rs = []
-        R_cs = []
+        R = {"LS": [], "CLS": [], "RS": [], "CS": []}
 
-        for i in range(len(df_train)):
-            R_ls.append(row_reduction(C_ls[i]['C'], y_train[i], k))
-            R_cls.append(row_reduction(C_cls[i]['C'], y_train[i], k))
-            R_rs.append(row_reduction(C_rs[i]['C'], y_train[i], k))
-            R_cs.append(row_reduction(C_cs[i]['C'], y_train[i], k))
+        for i in range(n_reps):
+            y = y_train[i].to_numpy().reshape(-1)
 
-        R = {
-            "R_ls": R_ls,
-            "R_cls": R_cls,
-            "R_rs": R_rs,
-            "R_cs": R_cs
-        }
-    else:
-        R = None
+            R["LS"].append(row_reduction(C["LS"][i]["C"], y, k))
+            R["CLS"].append(row_reduction(C["CLS"][i]["C"], y, k))
+            R["RS"].append(row_reduction(C["RS"][i]["C"], y, k))
+            R["CS"].append(row_reduction(C["CS"][i]["C"], y, k))
 
-    return scores, timing_scores, C, R
+            del y
+            gc.collect()
 
+    return scores, time_scores, C, R
+
+
+# ------------------------------------------------------------
+# Function to fit linear models on reduced matrices
+#
+# INPUT:
+#   C       : dict with column-reduced matrices and selected columns
+#   R       : dict with row-reduced matrices (or None)
+#   df_test : list of test matrices
+#   y_test  : list of test responses
+#   y_train : list of training responses
+#
+# OUTPUT:
+#   rmse : dict with RMSE values per method and replication
+#
+# Description:
+#   Fits linear regression models on reduced matrices (C or R),
+#   predicts on test data, and computes RMSE for each method.
+# ------------------------------------------------------------
 def linear_modeling(C, R, df_test, y_test, y_train):
-    # Fit linear models to the reduced data matrix
-    model_ls = []
-    model_cls = []
-    model_rs = []
-    model_cs = []
 
-    if R is not None:
-        n_reps = len(R['R_ls'])
-    else:
-        n_reps = len(C['C_ls'])
+    n_reps = len(df_test)
+    rmse = {"LS": [], "CLS": [], "RS": [], "CS": []}
 
     for i in range(n_reps):
+
         if R is not None:
-            model = LinearRegression()
-            model.fit(R['R_ls'][i]['R'], R['R_ls'][i]['y'])
-            model_ls.append(model)
-            model = LinearRegression()
-            model.fit(R['R_cls'][i]['R'], R['R_cls'][i]['y'])
-            model_cls.append(model)
-            model = LinearRegression()
-            model.fit(R['R_rs'][i]['R'], R['R_rs'][i]['y'])
-            model_rs.append(model)
-            model = LinearRegression()
-            model.fit(R['R_cs'][i]['R'], R['R_cs'][i]['y'])
-            model_cs.append(model)
+            # row-reduced modeling
+            models = {
+                "LS": LinearRegression().fit(R["LS"][i]["R"], R["LS"][i]["y"]),
+                "CLS": LinearRegression().fit(R["CLS"][i]["R"], R["CLS"][i]["y"]),
+                "RS": LinearRegression().fit(R["RS"][i]["R"], R["RS"][i]["y"]),
+                "CS": LinearRegression().fit(R["CS"][i]["R"], R["CS"][i]["y"])
+            }
+
+            for key in rmse.keys():
+                cols = C[key][i]["selected_columns"]
+                X_test_red = df_test[i].to_numpy()[:, cols]
+                preds = models[key].predict(X_test_red)
+                rmse[key].append(np.sqrt(mean_squared_error(y_test[i], preds)))
+
         else:
-            model = LinearRegression()
-            model.fit(C['C_ls'][i]['C'], y_train[i])
-            model_ls.append(model)
-            model = LinearRegression()
-            model.fit(C['C_cls'][i]['C'], y_train[i])
-            model_cls.append(model)
-            model = LinearRegression()
-            model.fit(C['C_rs'][i]['C'], y_train[i])
-            model_rs.append(model)
-            model = LinearRegression()
-            model.fit(C['C_cs'][i]['C'], y_train[i])
-            model_cs.append(model)
+            # column-only modeling
+            y_tr = y_train[i].to_numpy().reshape(-1)
 
+            models = {
+                "LS": LinearRegression().fit(C["LS"][i]["C"], y_tr),
+                "CLS": LinearRegression().fit(C["CLS"][i]["C"], y_tr),
+                "RS": LinearRegression().fit(C["RS"][i]["C"], y_tr),
+                "CS": LinearRegression().fit(C["CS"][i]["C"], y_tr)
+            }
 
-    # Build predictions
-    predictions_ls = []
-    predictions_cls = []
-    predictions_rs = []
-    predictions_cs = []
-    df_test_reduced_ls = []
-    df_test_reduced_cls = []
-    df_test_reduced_rs = []
-    df_test_reduced_cs = []
+            for key in rmse.keys():
+                cols = C[key][i]["selected_columns"]
+                X_test_red = df_test[i].to_numpy()[:, cols]
+                preds = models[key].predict(X_test_red)
+                rmse[key].append(np.sqrt(mean_squared_error(y_test[i], preds)))
 
-    for i in range(n_reps):
-        df_test_reduced_ls.append(df_test[i].iloc[:, C['C_ls'][i]['selected_columns']])
-        predictions_ls.append(model_ls[i].predict(df_test_reduced_ls[i]))
-        df_test_reduced_cls.append(df_test[i].iloc[:, C['C_cls'][i]['selected_columns']])
-        predictions_cls.append(model_cls[i].predict(df_test_reduced_cls[i]))
-        df_test_reduced_rs.append(df_test[i].iloc[:, C['C_rs'][i]['selected_columns']])
-        predictions_rs.append(model_rs[i].predict(df_test_reduced_rs[i]))
-        df_test_reduced_cs.append(df_test[i].iloc[:, C['C_cs'][i]['selected_columns']])
-        predictions_cs.append(model_cs[i].predict(df_test_reduced_cs[i]))
-
-    # Calculate RMSE
-    rmse_ls = []
-    rmse_cls = []
-    rmse_rs = []
-    rmse_cs = []
-    for i in range(n_reps):
-        rmse_ls.append(np.sqrt(mean_squared_error(y_test[i], predictions_ls[i])))
-        rmse_cls.append(np.sqrt(mean_squared_error(y_test[i], predictions_cls[i])))
-        rmse_rs.append(np.sqrt(mean_squared_error(y_test[i], predictions_rs[i])))
-        rmse_cs.append(np.sqrt(mean_squared_error(y_test[i], predictions_cs[i])))
-    rmse = {"LS": rmse_ls, "CLS": rmse_cls, "RS": rmse_rs, "CS": rmse_cs, }
+        gc.collect()
 
     return rmse
 
+# ------------------------------------------------------------
+# Function to compute RMSE of the full model (oracle benchmark)
+#
+# INPUT:
+#   df_train : list of training matrices
+#   df_test  : list of test matrices
+#   y_train  : list of training responses
+#   y_test   : list of test responses
+#   base     : base path to simulation folder
+#   folder   : subfolder name
+#
+# OUTPUT:
+#   rmse_full : list of RMSE values for each replication
+#
+# Description:
+#   Fits the full oracle model using the true non-zero beta
+#   positions and computes RMSE on the test data.
+# ------------------------------------------------------------
 def compute_full_rmse(df_train, df_test, y_train, y_test, base, folder):
+
     rmse_full = []
 
     for i in range(len(df_train)):
-        # Load beta for this replication
-        beta_df = pd.read_csv(f"{base}/{folder}/beta{i + 1}.csv")
-        beta = np.array(beta_df).reshape(-1)
+        beta = pd.read_csv(
+            f"{base}/{folder}/beta{i + 1}.csv",
+            header=0  # skip header row
+        ).to_numpy().reshape(-1)
 
-        # Identify selected columns (beta != 0)
-        selected_cols = np.where(beta != 0)[0]
+        selected = np.where(beta != 0)[0]
 
-        # Subset training and test data
-        X_train_sel = df_train[i].iloc[:, selected_cols]
-        X_test_sel = df_test[i].iloc[:, selected_cols]
+        X_train = df_train[i].to_numpy()[:, selected]
+        X_test = df_test[i].to_numpy()[:, selected]
 
-        # Make sure target vectors are 1D
-        y_tr = np.ravel(y_train[i])
-        y_te = np.ravel(y_test[i])
+        y_tr = y_train[i].to_numpy().reshape(-1)
+        y_te = y_test[i].to_numpy().reshape(-1)
 
-        # Fit linear model
-        model = LinearRegression()
-        model.fit(X_train_sel.to_numpy(), y_tr)
+        model = LinearRegression().fit(X_train, y_tr)
+        preds = model.predict(X_test)
 
-        # Predict on test set
-        predictions = model.predict(X_test_sel.to_numpy())
+        rmse_full.append(np.sqrt(mean_squared_error(y_te, preds)))
 
-        # Compute RMSE
-        rmse = np.sqrt(mean_squared_error(y_te, predictions))
-        rmse_full.append(rmse)
+        del X_train, X_test, y_tr, y_te, preds
+        gc.collect()
 
     return rmse_full
 
-def apply_row_after_col_reduction(k, seed, base, folder, reps, row_reduction = True):
-    ## 1. Data Load
-    # initialize lists to store data
-    df_train = []
-    df_test = []
-    y_train = []
-    y_test = []
+# ------------------------------------------------------------
+# Wrapper to perform full CUR-based data reduction and modeling
+#
+# INPUT:
+#   k            : target rank
+#   seed         : random seed
+#   base, folder : paths to simulation data
+#   reps         : number of replications
+#   row_reduction: boolean, whether row reduction is applied
+#
+# OUTPUT:
+#   Dictionary with:
+#       "scores"          : score vectors per method
+#       "time_scores"     : score computation times
+#       "selected_columns": selected columns per method
+#       "selected_rows"   : selected rows per method (or None)
+#       "rmse"            : RMSE values per method
+#
+# Description:
+#   Loads simulation data, performs score computation, column and
+#   optional row reduction, fits linear models, computes RMSE, and
+#   returns only the structures needed for evaluation.
+# ------------------------------------------------------------
+def apply_row_after_col_reduction(k, seed, base, folder, reps, row_reduction=True):
 
-    print("Reading in the simulation data...")
-    # read in the simulation data
-    for i in range(reps):
-        df_train.append(
-            pd.read_csv(f"{base}/{folder}/X_train{i + 1}.csv")
-        )
-        df_test.append(
-            pd.read_csv(f"{base}/{folder}/X_test{i + 1}.csv")
-        )
-        y_train.append(
-            pd.read_csv(f"{base}/{folder}/y_train{i + 1}.csv")
-        )
-        y_test.append(
-            pd.read_csv(f"{base}/{folder}/y_test{i + 1}.csv")
-        )
+    print(f"Reading simulation data for {reps} replications...")
 
-    print("Setting the seed...")
-    ## 2. Seeding
+    df_train = [pd.read_csv(f"{base}/{folder}/X_train{i+1}.csv") for i in range(reps)]
+    df_test  = [pd.read_csv(f"{base}/{folder}/X_test{i+1}.csv") for i in range(reps)]
+    y_train  = [pd.read_csv(f"{base}/{folder}/y_train{i+1}.csv") for i in range(reps)]
+    y_test   = [pd.read_csv(f"{base}/{folder}/y_test{i+1}.csv") for i in range(reps)]
+
+    print("Setting random seed...")
     random.seed(seed)
     np.random.seed(seed)
 
-    print("Performing data reduction...")
-    ## 3. Data Reduction
+    print("Performing data reduction (scores + column reduction)...")
+
     scores, time_scores, C, R = data_reduction(k, df_train, y_train, row_reduction)
 
-    print("Building linear models...")
-    ## 4. Linear Modeling
+    print("Fitting linear models on reduced data...")
+
     rmse = linear_modeling(C, R, df_test, y_test, y_train)
 
-    print("Building Full Model / Benchmark...")
-    ## 5. Full Model
+    print("Computing full-model benchmark (oracle RMSE)...")
+
     rmse_full = compute_full_rmse(df_train, df_test, y_train, y_test, base, folder)
     rmse["Full"] = rmse_full
 
     print("Data Reduction & Modeling completed.")
 
-    return scores, time_scores, C, R, rmse
+    # return only relevant structures
+    return {
+        "scores": scores,
+        "time_scores": time_scores,
+        "selected_columns": {m: [C[m][i]["selected_columns"] for i in range(reps)] for m in C},
+        "selected_rows": None if R is None else {m: [R[m][i]["selected_rows"] for i in range(reps)] for m in R},
+        "rmse": rmse
+    }
