@@ -473,15 +473,30 @@ def apply_row_after_col_reduction(k, seed, base, folder, reps, row_reduction=Tru
 
     print("Data Reduction & Modeling completed.")
 
-    # return all relevant structures
+    # extract only selected column indices
+    selected_columns_clean = {
+        method: [C[method][i]["selected_columns"] for i in range(reps)]
+        for method in ["LS", "CLS", "RS", "CS"]
+    }
+
+    # extract only selected row indices (if row reduction enabled)
+    if row_reduction:
+        selected_rows_clean = {
+            method: [R[method][i]["selected_rows"] for i in range(reps)]
+            for method in ["LS", "CLS", "RS", "CS"]
+        }
+    else:
+        selected_rows_clean = None
+
     return {
         "scores": scores,
         "time_scores": time_scores,
-        "selected_columns": C,
-        "selected_rows": R,
+        "selected_columns": selected_columns_clean,
+        "selected_rows": selected_rows_clean,
         "rmse_train": rmse_train,
         "rmse_test": rmse_test
     }
+
 
 def run_sampling_variance_row_after_col(
     k,
