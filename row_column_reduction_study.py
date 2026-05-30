@@ -267,6 +267,10 @@ def linear_modeling(selected_columns, R_list, y_list, df_train, df_test, y_train
     # initialize RMSE containers
     rmse_train = {"LS": [], "CLS": [], "RS": [], "CS": []}
     rmse_test = {"LS": [], "CLS": [], "RS": [], "CS": []}
+    time_model = {"LS": [], "CLS": [], "RS": [], "CS": []}
+
+    # initialize time containers
+    time_model = {"LS": [], "CLS": [], "RS": [], "CS": []}
 
     # loop over replications
     for i in range(n_reps):
@@ -278,7 +282,9 @@ def linear_modeling(selected_columns, R_list, y_list, df_train, df_test, y_train
             cols = selected_columns[method][i]
 
             # fit model on row-reduced matrix
+            t0 = time.perf_counter()
             model = LinearRegression().fit(R_list[i][:, cols], y_list[i].ravel())
+            time_model[method].append(time.perf_counter() - t0)
 
             # compute train RMSE
             X_train_red = df_train[i].to_numpy()[:, cols]
@@ -294,7 +300,7 @@ def linear_modeling(selected_columns, R_list, y_list, df_train, df_test, y_train
                 np.sqrt(mean_squared_error(y_test[i], preds_test))
             )
 
-    return rmse_train, rmse_test
+    return rmse_train, rmse_test, time_model
 
 def compute_full_rmse(df_train, df_test, y_train, y_test, base, folder):
     """
@@ -418,7 +424,7 @@ def apply_col_after_row_reduction(k, seed, base, folder, reps, gaussian=False):
 
     # fit linear models
     print("Fitting linear models...")
-    rmse_train, rmse_test = linear_modeling(
+    rmse_train, rmse_test, time_model = linear_modeling(
         selected_columns,
         R_list,
         y_list,
@@ -438,6 +444,7 @@ def apply_col_after_row_reduction(k, seed, base, folder, reps, gaussian=False):
     return {
         "scores": scores,
         "time_scores": time_scores,
+        "time_model": time_model,
         "selected_columns": selected_columns,
         "selected_rows": selected_rows,
         "rmse_train": rmse_train,
@@ -521,12 +528,22 @@ def run_sampling_variance_col_after_row(
         selected_rows = out["selected_rows"]
         scores = out["scores"]
         time_scores = out["time_scores"]
+        time_model = out["time_model"]
 
         # container for aggregated results of this seed
         seed_result = {}
 
         # container for test loss summaries
         loss_summary = {}
+
+        # container for time scores summaries
+        time_scores_summary = {}
+
+        # container for model scores summaries
+        time_model_summary = {}
+
+        # container for total time summaries
+        time_total_summary = {}
 
         # container for train loss summaries
         train_loss_summary = {}
@@ -549,6 +566,36 @@ def run_sampling_variance_col_after_row(
 
                 # skip training RMSE for "Full"
                 continue
+
+            # extract raw score times
+            raw_vals_time_scores = time_scores[method]
+
+            # compute mean and median for scores times
+            time_scores_summary[method] = {
+                "raw": raw_vals_time_scores,
+                "mean": float(np.mean(raw_vals_time_scores)),
+                "median": float(np.median(raw_vals_time_scores))
+            }
+
+            # extract raw model times
+            raw_vals_time_model = time_model[method]
+
+            # compute mean and median for scores times
+            time_model_summary[method] = {
+                "raw": raw_vals_time_model,
+                "mean": float(np.mean(raw_vals_time_model)),
+                "median": float(np.median(raw_vals_time_model))
+            }
+
+            # also calculate total times
+            total = np.array(raw_vals_time_scores) + np.array(raw_vals_time_model)
+
+            # compute mean and median for total times
+            time_total_summary[method] = {
+                "raw": total.tolist(),
+                "mean": float(np.mean(total)),
+                "median": float(np.median(total))
+            }
 
             # extract raw test RMSE values
             raw_vals_test = rmse_test[method]
@@ -576,7 +623,9 @@ def run_sampling_variance_col_after_row(
         seed_result["selected_columns"] = selected_columns
         seed_result["selected_rows"] = selected_rows
         seed_result["scores"] = scores
-        seed_result["time_scores"] = time_scores
+        seed_result["time_scores"] = time_scores_summary
+        seed_result["time_model"] = time_model_summary
+        seed_result["time_total"] = time_total_summary
 
         # save seed result
         results[outer_seed] = seed_result
