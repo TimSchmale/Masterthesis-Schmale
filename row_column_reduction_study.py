@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import time
+import pickle
 from scoring_functions import get_column_leverage_scores, get_row_leverage_scores, get_random_scores, get_combined_scores, get_cross_leverage_scores
 from statsmodels.sandbox.distributions.genpareto import shape
 
@@ -14,30 +15,33 @@ from visualizations import *
 
 def row_reduction(k, X, y, gaussian=False):
     """
-    Row reduction using sketching-based sampling.
+    Row reduction using sketching-based dimensionality reduction.
 
-    This function applies either Gaussian or Rademacher sketching
-    to reduce the number of rows in the design matrix. The sketch
-    size is determined by k * log(d). The reduced matrix and the
-    corresponding reduced response vector are returned.
+    This function applies either Gaussian or Rademacher sketching to reduce
+    the number of rows in the design matrix. The sketch size is determined
+    by r = k * log(d). The resulting sketched matrix R preserves the
+    subspace structure of X in expectation and is used as the basis for
+    subsequent column reduction.
 
     Parameters
     ----------
     k : int
-        Target rank for determining the sketch size.
+        Target rank controlling the sketch size.
     X : array-like or DataFrame
         Design matrix of shape (n, d).
     y : array-like or Series
         Response vector of length n.
     gaussian : bool
-        If True, Gaussian sketching is used. Otherwise, Rademacher.
+        If True, Gaussian sketching is used. Otherwise, Rademacher sketching.
 
     Returns
     -------
-    tuple
-        (R, y_reduced) where R is the row-reduced matrix and
-        y_reduced is the reduced response vector.
+    R : ndarray of shape (r, d)
+        Row-reduced design matrix.
+    y_reduced : ndarray of shape (r, 1)
+        Corresponding sketched response vector.
     """
+
 
     # convert X to numpy array
     X = X.to_numpy() if isinstance(X, pd.DataFrame) else np.asarray(X)
@@ -84,25 +88,29 @@ def column_reduction(R, scores, k):
     """
     Column reduction using EXPECTED(c) sampling.
 
-    This function samples columns independently using scaled
-    probabilities derived from the provided score vector. Selected
-    columns are rescaled according to the CUR theorem.
+    This function samples columns independently using scaled probabilities
+    derived from the provided score vector. The expected number of sampled
+    columns is c = k * log(k). Selected columns are rescaled according to
+    the CUR theorem to preserve unbiasedness.
 
     Parameters
     ----------
-    R : array-like
-        Row-reduced matrix of shape (r, d).
-    scores : array-like
-        Column score vector of length d.
+    R : ndarray of shape (r, d)
+        Row-reduced design matrix.
+    scores : array-like of length d
+        Column score vector (e.g., LS, CLS, RS, CS).
     k : int
-        Target rank for determining the number of sampled columns.
+        Target rank controlling the expected number of sampled columns.
 
     Returns
     -------
     dict
-        Dictionary containing:
-            "C" : reduced matrix (r x t)
-            "selected_columns" : list of selected column indices
+        {
+            "C" : ndarray of shape (r, t)
+                Column-reduced matrix.
+            "selected_columns" : list of int
+                Indices of sampled columns.
+        }
     """
 
     # convert R to numpy array
@@ -141,28 +149,48 @@ def column_reduction(R, scores, k):
 
 def data_reduction(k, df_train, y_train, gaussian=False):
     """
-    Perform row-first data reduction followed by column reduction.
+    Row-first data reduction pipeline.
 
-    This function first applies sketching-based row reduction to each
-    replication. It then computes LS, CLS, RS, and CS column scores on
-    the row-reduced matrices and applies EXPECTED(c) column sampling.
+    This function performs:
+    1. Row reduction via sketching (Gaussian or Rademacher).
+    2. Column score computation on the sketched matrices (LS, CLS, RS, CS).
+    3. Column reduction via EXPECTED(c) sampling.
+
+    If any method selects more columns than available sketch rows (t > r),
+    the configuration is invalid for linear modeling and the function
+    returns None-values (soft abort).
 
     Parameters
     ----------
     k : int
-        Target rank for determining sketch and sample sizes.
+        Target rank controlling sketch and sampling sizes.
     df_train : list of DataFrames
         Training matrices for each replication.
     y_train : list of Series
         Response vectors for each replication.
     gaussian : bool
-        Whether Gaussian sketching is used for row reduction.
+        Whether Gaussian sketching is used.
 
     Returns
     -------
-    tuple
-        (scores, time_scores, selected_columns, selected_rows, R_list, y_list)
+    scores : dict
+        Score vectors per method and replication.
+    time_scores : dict
+        Score computation times per method.
+    selected_columns : dict
+        Selected column indices per method and replication.
+    selected_rows : list
+        Selected row indices per replication.
+    R_list : list
+        Row-reduced matrices.
+    y_list : list
+        Row-reduced response vectors.
+
+    Or (soft abort)
+    ---------------
+    None, None, None, None, None, None
     """
+
 
     # determine number of replications
     n_reps = len(df_train)
@@ -219,14 +247,36 @@ def data_reduction(k, df_train, y_train, gaussian=False):
     # perform column reduction for each replication
     for i in range(n_reps):
 
-        # extract reduced matrix
         R = R_list[i]
+        r = R.shape[0]  # number of rows after sketching
 
-        # apply column reduction for each score type
-        selected_columns["LS"].append(column_reduction(R, scores["LS"][i], k)["selected_columns"])
-        selected_columns["CLS"].append(column_reduction(R, np.abs(scores["CLS"][i]), k)["selected_columns"])
-        selected_columns["RS"].append(column_reduction(R, scores["RS"][i], k)["selected_columns"])
-        selected_columns["CS"].append(column_reduction(R, scores["CS"][i], k)["selected_columns"])
+        # LS
+        cols_ls = column_reduction(R, scores["LS"][i], k)["selected_columns"]
+        if len(cols_ls) > r:
+            print(f"[WARN] Aborting k={k} for method=LS,: {len(cols_ls)} columns > {r} rows. Skipping.")
+            return None, None, None, None, None, None
+        selected_columns["LS"].append(cols_ls)
+
+        # CLS
+        cols_cls = column_reduction(R, np.abs(scores["CLS"][i]), k)["selected_columns"]
+        if len(cols_cls) > r:
+            print(f"[WARN] Aborting k={k} for method=CLS,: {len(cols_cls)} columns > {r} rows. Skipping.")
+            return None, None, None, None, None, None
+        selected_columns["CLS"].append(cols_cls)
+
+        # RS
+        cols_rs = column_reduction(R, scores["RS"][i], k)["selected_columns"]
+        if len(cols_rs) > r:
+            print(f"[WARN] Aborting k={k} for method=RS,: {len(cols_rs)} columns > {r} rows. Skipping.")
+            return None, None, None, None, None, None
+        selected_columns["RS"].append(cols_rs)
+
+        # CS
+        cols_cs = column_reduction(R, scores["CS"][i], k)["selected_columns"]
+        if len(cols_cs) > r:
+            print(f"[WARN] Aborting k={k} for method=CS,: {len(cols_cs)} columns > {r} rows. Skipping.")
+            return None, None, None, None, None, None
+        selected_columns["CS"].append(cols_cs)
 
     return scores, time_scores, selected_columns, selected_rows, R_list, y_list
 
@@ -234,16 +284,16 @@ def linear_modeling(selected_columns, R_list, y_list, df_train, df_test, y_train
     """
     Fit linear models on reduced matrices and compute RMSE.
 
-    This function fits linear regression models on the row-reduced
-    matrices using the selected columns. It computes both training
-    and test RMSE for each method and replication.
+    For each replication and each CUR method (LS, CLS, RS, CS), a linear
+    regression model is fitted on the row- and column-reduced matrix.
+    Training and test RMSE are computed, along with model fitting times.
 
     Parameters
     ----------
     selected_columns : dict
         Selected column indices per method and replication.
     R_list : list
-        Row-reduced matrices for each replication.
+        Row-reduced matrices.
     y_list : list
         Row-reduced response vectors.
     df_train : list of DataFrames
@@ -257,9 +307,14 @@ def linear_modeling(selected_columns, R_list, y_list, df_train, df_test, y_train
 
     Returns
     -------
-    tuple
-        (rmse_train, rmse_test)
+    rmse_train : dict
+        Training RMSE values per method and replication.
+    rmse_test : dict
+        Test RMSE values per method and replication.
+    time_model : dict
+        Model fitting times per method.
     """
+
 
     # determine number of replications
     n_reps = len(df_test)
@@ -304,11 +359,12 @@ def linear_modeling(selected_columns, R_list, y_list, df_train, df_test, y_train
 
 def compute_full_rmse(df_train, df_test, y_train, y_test, base, folder):
     """
-    Compute oracle RMSE using the true non-zero coefficients.
+    Compute benchmark RMSE using the true non-zero coefficients.
 
-    This function loads the true beta vector for each replication,
-    identifies the non-zero coefficients, fits a linear model on
-    the corresponding columns, and computes test RMSE.
+    This function loads the true beta vector for each replication, identifies
+    the non-zero coefficients, fits a linear model on the corresponding
+    columns, and computes the resulting test RMSE. This serves as a benchmark
+    for CUR-based approximations.
 
     Parameters
     ----------
@@ -321,17 +377,17 @@ def compute_full_rmse(df_train, df_test, y_train, y_test, base, folder):
     y_test : list of Series
         Test responses.
     base : str
-        Base directory.
+        Base directory containing simulation data.
     folder : str
         Subfolder containing beta files.
 
     Returns
     -------
     list
-        Oracle RMSE values for each replication.
+        Benchmark RMSE values for each replication.
     """
 
-    # container for oracle RMSE values
+    # container for benchmark RMSE values
     rmse_full = []
 
     # loop over replications
@@ -359,7 +415,7 @@ def compute_full_rmse(df_train, df_test, y_train, y_test, base, folder):
         y_tr = y_train[i].to_numpy().reshape(-1)
         y_te = y_test[i].to_numpy().reshape(-1)
 
-        # fit oracle model
+        # fit benchmark model
         model = LinearRegression().fit(X_train, y_tr)
 
         # compute predictions
@@ -370,76 +426,118 @@ def compute_full_rmse(df_train, df_test, y_train, y_test, base, folder):
 
     return rmse_full
 
-def apply_col_after_row_reduction(k, seed, base, folder, reps, gaussian=False):
+def apply_col_after_row_reduction(
+        k,
+        seed,
+        X_train_list,
+        X_test_list,
+        y_train_list,
+        y_test_list,
+        base,
+        folder,
+        gaussian=False):
     """
-    Full pipeline for Row → Column reduction and linear modeling.
+    Full Row → Column pipeline for a single seed.
 
-    This function loads simulation data, performs sketching-based
-    row reduction, computes column scores, applies EXPECTED(c)
-    column sampling, fits linear models, computes RMSE, and adds
-    the oracle RMSE benchmark.
+    This function performs:
+    1. Row reduction via sketching.
+    2. Column score computation.
+    3. Column reduction via EXPECTED(c).
+    4. Linear modeling on reduced matrices.
+    5. Benchmark RMSE computation.
+
+    If row/column reduction yields an invalid CUR configuration (t > r),
+    the function returns NaN-structured results (soft abort).
 
     Parameters
     ----------
     k : int
         Target rank.
     seed : int
-        Random seed.
+        Random seed for reproducibility.
+    X_train_list : list of ndarrays
+        Training matrices for each replication.
+    X_test_list : list of ndarrays
+        Test matrices for each replication.
+    y_train_list : list of ndarrays
+        Training responses.
+    y_test_list : list of ndarrays
+        Test responses.
     base : str
         Base directory.
     folder : str
-        Subfolder containing simulation data.
-    reps : int
-        Number of replications.
+        Subfolder containing beta files.
     gaussian : bool
         Whether Gaussian sketching is used.
 
     Returns
     -------
     dict
-        Dictionary containing:
-            scores
-            time_scores
-            selected_columns
-            selected_rows
-            rmse_train
-            rmse_test
+        Dictionary containing scores, timings, selected indices,
+        and RMSE values for all methods.
+
+    Or (soft abort)
+    ---------------
+    dict with NaN-valued RMSE structures.
     """
 
-    # load simulation data
-    print("Reading simulation data...")
-    df_train = [pd.read_csv(f"{base}/{folder}/X_train{i+1}.csv") for i in range(reps)]
-    df_test  = [pd.read_csv(f"{base}/{folder}/X_test{i+1}.csv") for i in range(reps)]
-    y_train  = [pd.read_csv(f"{base}/{folder}/y_train{i+1}.csv") for i in range(reps)]
-    y_test   = [pd.read_csv(f"{base}/{folder}/y_test{i+1}.csv") for i in range(reps)]
 
-    # set random seed
+    # set seed
+    print(f"Setting random seed inside hybrid reduction pipeline (seed = {seed})...")
     random.seed(seed)
     np.random.seed(seed)
 
     # perform row-first reduction
     print("Performing data reduction...")
-    scores, time_scores, selected_columns, selected_rows, R_list, y_list = \
-        data_reduction(k, df_train, y_train, gaussian)
+    scores, time_scores, selected_columns, selected_rows, R_list, y_list = data_reduction(
+        k,
+        X_train_list,
+        y_train_list,
+        gaussian
+    )
+
+    # soft abort
+    if scores is None:
+        print(f"[WARN] Aborting k={k} as p>n detected.")
+
+        # nan structure
+        nan_dict = {m: [np.nan] * len(X_train_list) for m in ["LS", "CLS", "RS", "CS"]}
+
+        return {
+            "scores": None,
+            "time_scores": None,
+            "time_model": None,
+            "selected_columns": None,
+            "selected_rows": None,
+            "rmse_train": nan_dict,
+            "rmse_test": {**nan_dict, "Full": [np.nan] * len(X_train_list)},
+        }
 
     # fit linear models
-    print("Fitting linear models...")
+    print("Fitting linear models on reduced data...")
     rmse_train, rmse_test, time_model = linear_modeling(
         selected_columns,
         R_list,
         y_list,
-        df_train,
-        df_test,
-        y_train,
-        y_test
+        X_train_list,
+        X_test_list,
+        y_train_list,
+        y_test_list
     )
 
-    # compute oracle RMSE
-    print("Computing full model benchmark...")
-    rmse_full = compute_full_rmse(df_train, df_test, y_train, y_test, base, folder)
+    # compute benchmark RMSE
+    print("Computing full model benchmark (RMSE)...")
+    rmse_full = compute_full_rmse(
+        X_train_list,
+        X_test_list,
+        y_train_list,
+        y_test_list,
+        base,
+        folder
+    )
     rmse_test["Full"] = rmse_full
 
-    print("Completed.")
+    print("Data Reduction & Modeling completed.")
 
     return {
         "scores": scores,
@@ -451,48 +549,98 @@ def apply_col_after_row_reduction(k, seed, base, folder, reps, gaussian=False):
         "rmse_test": rmse_test
     }
 
+def numpy_train_test_split(X, y, test_size, seed):
+    """
+    NumPy-based deterministic train/test split.
+
+    This function shuffles indices using a fixed random seed and partitions
+    the dataset into training and test subsets.
+
+    Parameters
+    ----------
+    X : ndarray of shape (n, p)
+        Design matrix.
+    y : ndarray of shape (n,)
+        Response vector.
+    test_size : float
+        Fraction of samples assigned to the test set.
+    seed : int
+        Random seed for reproducibility.
+
+    Returns
+    -------
+    X_train, X_test, y_train, y_test : ndarray
+        Train/test split of the dataset.
+    """
+
+
+    # get length of dataset
+    n = X.shape[0]
+
+    # determine train and test sizes
+    n_test = int(np.floor(n * test_size))
+    n_train = n - n_test
+
+    # shuffle the dataset indices
+    rng = np.random.default_rng(seed)
+    idx = np.arange(n)
+    rng.shuffle(idx)
+
+    # get the train and test dataset
+    train_idx = idx[:n_train]
+    test_idx = idx[n_train:]
+
+    return (
+        X[train_idx],
+        X[test_idx],
+        y[train_idx],
+        y[test_idx]
+    )
+
 def run_sampling_variance_col_after_row(
-    k,
+    k_vector,
     base,
     folder,
     reps=10,
     outer_reps=10,
+    test_size=0.2,
+    save_name=None,
+    results_folder=None,
     gaussian=False
 ):
     """
-    Sampling variance analysis for the Row→Column CUR pipeline.
+    Sampling variance analysis for the Row→Column pipeline.
 
-    This function runs the full row-first reduction pipeline multiple
-    times using different random seeds. Each run produces 'reps'
-    RMSE values per method. For each outer repetition and each method,
-    the function computes:
-        - raw   : list of RMSE values (length reps)
-        - mean  : average RMSE
-        - median: median RMSE
+    For each outer repetition (seed), this function:
+    1. Loads all datasets.
+    2. Performs train/test splits.
+    3. Runs the full Row→Column pipeline for each k.
+    4. Aggregates RMSE, score times, model times, and structural information.
+    5. Stores results per seed.
 
-    Additionally, the function stores:
-        - train RMSE values
-        - selected columns
-        - selected rows
-        - score vectors
-        - score computation times
-
-    The output enables full sampling variance and stability analysis.
+    Soft aborts propagate NaN-valued RMSE structures for invalid CUR
+    configurations (t > r).
 
     Parameters
     ----------
-    k : int
-        Target rank for sketch and sampling sizes.
+    k_vector : list of int
+        List of target ranks to evaluate.
     base : str
         Base directory containing simulation data.
     folder : str
-        Subfolder containing the simulation files.
+        Subfolder containing simulation files.
     reps : int
-        Number of replications inside each wrapper run.
+        Number of replications per seed.
     outer_reps : int
-        Number of wrapper repetitions with different seeds.
+        Number of outer repetitions (different seeds).
+    test_size : float
+        Fraction of samples assigned to the test set.
+    save_name : str or None
+        Optional prefix for saved result files.
+    results_folder : str
+        Folder where results are stored.
     gaussian : bool
-        Whether Gaussian sketching is used for row reduction.
+        Whether Gaussian sketching is used.
 
     Returns
     -------
@@ -500,135 +648,158 @@ def run_sampling_variance_col_after_row(
         Nested dictionary containing sampling variance results for each seed.
     """
 
-    # container for all outer seeds
+
+    print("Loading all datasets...")
+
+    # Load all datasets
+    X_list = [
+        pd.read_csv(f"{base}/{folder}/X{i + 1}.csv").to_numpy()
+        for i in range(reps)
+    ]
+    y_list = [
+        pd.read_csv(f"{base}/{folder}/y{i + 1}.csv").to_numpy().reshape(-1)
+        for i in range(reps)
+    ]
+
+    # initialize the results
     results = {}
 
     # loop over outer repetitions (different seeds)
-    for outer_seed in range(1, outer_reps + 1):
+    for seed in range(1, outer_reps + 1):
 
-        # print progress information
-        print(f"Running outer repetition with seed = {outer_seed}")
+        print(f"\n============================================================")
+        print(f"Running seed = {seed}")
+        print("============================================================")
 
-        # run the full row→column pipeline once
-        out = apply_col_after_row_reduction(
-            k=k,
-            seed=outer_seed,
-            base=base,
-            folder=folder,
-            reps=reps,
-            gaussian=gaussian
-        )
+        np.random.seed(seed + 42)
+        random.seed(seed + 42)
 
-        # extract RMSE values
-        rmse_test = out["rmse_test"]
-        rmse_train = out["rmse_train"]
+        # initialize Train/Test Split
+        X_train_list = []
+        X_test_list = []
+        y_train_list = []
+        y_test_list = []
 
-        # extract structural information
-        selected_columns = out["selected_columns"]
-        selected_rows = out["selected_rows"]
-        scores = out["scores"]
-        time_scores = out["time_scores"]
-        time_model = out["time_model"]
+        # loop over the different datasets
+        for i in range(reps):
+            # create train test split
+            X_tr, X_te, y_tr, y_te = numpy_train_test_split(
+                X_list[i],
+                y_list[i],
+                test_size=test_size,
+                seed=seed
+            )
+            X_train_list.append(X_tr)
+            X_test_list.append(X_te)
+            y_train_list.append(y_tr)
+            y_test_list.append(y_te)
 
-        # container for aggregated results of this seed
-        seed_result = {}
+        # initialize seed results
+        results[seed] = {}
 
-        # container for test loss summaries
-        loss_summary = {}
+        # Run for each k
+        for k in k_vector:
+            print(f"\n--- Running k = {k} ---")
 
-        # container for time scores summaries
-        time_scores_summary = {}
+            # perform reduction pipeline
+            out = apply_col_after_row_reduction(
+                k=k,
+                seed=seed,
+                X_train_list=X_train_list,
+                X_test_list=X_test_list,
+                y_train_list=y_train_list,
+                y_test_list=y_test_list,
+                base=base,
+                folder=folder,
+                reps=reps,
+                gaussian=gaussian
+            )
 
-        # container for model scores summaries
-        time_model_summary = {}
-
-        # container for total time summaries
-        time_total_summary = {}
-
-        # container for train loss summaries
-        train_loss_summary = {}
-
-        # iterate over all methods (LS, CLS, RS, CS, Full)
-        for method in rmse_test.keys():
-
-            # handle "Full" separately because it has no training RMSE
-            if method == "Full":
-
-                # extract raw test RMSE values
-                raw_vals_test = rmse_test["Full"]
-
-                # compute mean and median for test RMSE
-                loss_summary["Full"] = {
-                    "raw": raw_vals_test,
-                    "mean": float(np.mean(raw_vals_test)),
-                    "median": float(np.median(raw_vals_test))
+            if out["scores"] is None:
+                # Soft abort
+                results[seed][k] = {
+                    "loss": out["rmse_test"],
+                    "train_loss": out["rmse_train"],
+                    "selected_columns": None,
+                    "selected_rows": None,
+                    "scores": None,
+                    "time_scores": None,
+                    "time_model": None,
                 }
-
-                # skip training RMSE for "Full"
                 continue
 
-            # extract raw score times
-            raw_vals_time_scores = time_scores[method]
+            # extract RMSE values
+            rmse_test = out["rmse_test"]
+            rmse_train = out["rmse_train"]
 
-            # compute mean and median for scores times
-            time_scores_summary[method] = {
-                "raw": raw_vals_time_scores,
-                "mean": float(np.mean(raw_vals_time_scores)),
-                "median": float(np.median(raw_vals_time_scores))
+            # extract further structural information
+            time_scores = out["time_scores"]
+            time_model = out["time_model"]
+
+            # summarize the errors
+            loss_summary = {
+                method: {
+                    "raw": rmse_test[method],
+                    "mean": float(np.mean(rmse_test[method])),
+                    "median": float(np.median(rmse_test[method]))
+                }
+                for method in rmse_test.keys()
             }
 
-            # extract raw model times
-            raw_vals_time_model = time_model[method]
-
-            # compute mean and median for scores times
-            time_model_summary[method] = {
-                "raw": raw_vals_time_model,
-                "mean": float(np.mean(raw_vals_time_model)),
-                "median": float(np.median(raw_vals_time_model))
+            # same for sanity check of training errors
+            train_loss_summary = {
+                method: {
+                    "raw": rmse_train[method],
+                    "mean": float(np.mean(rmse_train[method])),
+                    "median": float(np.median(rmse_train[method]))
+                }
+                for method in rmse_train.keys()
             }
 
-            # also calculate total times
-            total = np.array(raw_vals_time_scores) + np.array(raw_vals_time_model)
-
-            # compute mean and median for total times
-            time_total_summary[method] = {
-                "raw": total.tolist(),
-                "mean": float(np.mean(total)),
-                "median": float(np.median(total))
+            # summarize the time for score calculation
+            score_time_summary = {
+                method: {
+                    "raw": time_scores[method],
+                    "mean": float(np.mean(time_scores[method])),
+                    "median": float(np.median(time_scores[method]))
+                }
+                for method in time_scores.keys()
             }
 
-            # extract raw test RMSE values
-            raw_vals_test = rmse_test[method]
-
-            # compute mean and median for test RMSE
-            loss_summary[method] = {
-                "raw": raw_vals_test,
-                "mean": float(np.mean(raw_vals_test)),
-                "median": float(np.median(raw_vals_test))
+            # same for modeling time
+            model_time_summary = {
+                method: {
+                    "raw": time_model[method],
+                    "mean": float(np.mean(time_model[method])),
+                    "median": float(np.median(time_model[method]))
+                }
+                for method in time_model.keys()
             }
 
-            # extract raw train RMSE values
-            raw_vals_train = rmse_train[method]
-
-            # compute mean and median for train RMSE
-            train_loss_summary[method] = {
-                "raw": raw_vals_train,
-                "mean": float(np.mean(raw_vals_train)),
-                "median": float(np.median(raw_vals_train))
+            # store everything
+            results[seed][k] = {
+                "loss": loss_summary,
+                "train_loss": train_loss_summary,
+                "selected_columns": out["selected_columns"],
+                "selected_rows": out["selected_rows"],
+                "scores": out["scores"],
+                "time_scores": score_time_summary,
+                "time_model": model_time_summary,
             }
 
-        # store all results for this seed
-        seed_result["loss"] = loss_summary
-        seed_result["train_loss"] = train_loss_summary
-        seed_result["selected_columns"] = selected_columns
-        seed_result["selected_rows"] = selected_rows
-        seed_result["scores"] = scores
-        seed_result["time_scores"] = time_scores_summary
-        seed_result["time_model"] = time_model_summary
-        seed_result["time_total"] = time_total_summary
+        # Save seed results
+        save_path = f"{base}/{results_folder}"
+        os.makedirs(save_path, exist_ok=True)
 
-        # save seed result
-        results[outer_seed] = seed_result
+        if save_name is None:
+            seed_file = f"{save_path}/results_seed_{seed}.pkl"
+        else:
+            seed_file = f"{save_path}/{save_name}_seed_{seed}.pkl"
+
+        with open(seed_file, "wb") as f:
+            pickle.dump(results[seed], f)
+
+        print(f"Saved seed {seed} → {seed_file}")
 
     # return full sampling variance structure
     return results

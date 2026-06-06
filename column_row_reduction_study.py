@@ -528,7 +528,7 @@ def apply_row_after_col_reduction(
 
     reps = len(X_train_list)
 
-    # # set seed
+    # set seed
     print(f"Setting random seed inside importance-based reduction pipeline (seed = {seed})...")
     random.seed(seed)
     np.random.seed(seed)
