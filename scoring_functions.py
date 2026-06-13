@@ -144,7 +144,7 @@ def get_cross_leverage_scores(X, y):
     return Q[:-1, :] @ Q[-1, :]
 
 
-def get_combined_scores(X, y, k, p_leverage):
+def get_combined_scores(X, y, k, p_leverage, ls = None, cls = None):
     """
     Compute combined column scores using LS and CLS components.
 
@@ -162,6 +162,13 @@ def get_combined_scores(X, y, k, p_leverage):
         Rank parameter for LS computation.
     p_leverage : float
         Weight for leverage scores in the convex combination.
+    ls : ndarray of shape (p,), optional
+        Precomputed (unnormalized) column leverage scores. If None,
+        the scores are computed internally.
+
+    cls : ndarray of shape (p,), optional
+        Precomputed (unnormalized) cross-leverage scores. If None,
+        the scores are computed internally.
 
     Returns
     -------
@@ -169,10 +176,13 @@ def get_combined_scores(X, y, k, p_leverage):
         Vector of length p containing combined scores.
     """
 
-    ls = get_column_leverage_scores(X, k)
+    if ls is None:
+        ls = get_column_leverage_scores(X, k)
     ls = ls / np.linalg.norm(ls)
 
-    cls = np.abs(get_cross_leverage_scores(X, y))
+    if cls is None:
+        cls = np.abs(get_cross_leverage_scores(X, y))
+
     cls = cls / np.linalg.norm(cls)
 
     return (1 - p_leverage) * cls + p_leverage * ls

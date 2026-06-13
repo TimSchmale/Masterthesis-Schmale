@@ -56,10 +56,10 @@ def get_beta_hits(base, folder, C, reps, beta_lasso=None):
         beta_nonzero.append(np.where(beta_i != 0.0)[0])
 
         # extract selected columns for each CUR method
-        cls_cols = C['C_cls'][i]['selected_columns']
-        ls_cols  = C['C_ls'][i]['selected_columns']
-        rs_cols  = C['C_rs'][i]['selected_columns']
-        cs_cols  = C['C_cs'][i]['selected_columns']
+        cls_cols = C['CLS'][i]
+        ls_cols = C['LS'][i]
+        rs_cols = C['RS'][i]
+        cs_cols = C['CS'][i]
 
         # compute intersections with true support
         cls_hits.append(np.intersect1d(cls_cols, beta_nonzero[i]))
@@ -152,10 +152,10 @@ def get_beta_share(beta, C, beta_lasso=None):
         beta_total = np.sum(np.abs(beta[i]))
 
         # extract selected columns
-        cls_cols = C['C_cls'][i]['selected_columns']
-        ls_cols  = C['C_ls'][i]['selected_columns']
-        rs_cols  = C['C_rs'][i]['selected_columns']
-        cs_cols  = C['C_cs'][i]['selected_columns']
+        cls_cols = C['CLS'][i]
+        ls_cols = C['LS'][i]
+        rs_cols = C['RS'][i]
+        cs_cols = C['CS'][i]
 
         # compute share for each CUR method
         cls_share.append(np.sum(np.abs(beta[i][cls_cols])) / beta_total * 100)
@@ -292,3 +292,117 @@ def evaluate_screening_performance(base, folder, C, reps):
         cs_share,
         lasso_share=None
     )
+
+def collect_screening_results(results, k_vector, base, folder, reps):
+    rows = []
+
+    for seed in results.keys():
+        for k in k_vector:
+
+            # Extract selected columns for this seed/k
+            C = results[seed][k]["selected_columns"]
+
+            # Skip soft aborts or invalid structures
+            if C is None:
+                continue
+
+            # Skip if C is a list (invalid)
+            if not isinstance(C, dict):
+                continue
+
+            # Skip if required keys missing
+            required = {"CLS", "LS", "RS", "CS"}
+            if not required.issubset(C.keys()):
+                continue
+
+            # Compute screening metrics
+            beta, beta_nonzero, cls_hits, ls_hits, rs_hits, cs_hits, _ = \
+                get_beta_hits(base, folder, C, reps)
+
+            cls_share, ls_share, rs_share, cs_share, _ = \
+                get_beta_share(beta, C)
+
+            # Build rows
+            for rep in range(reps):
+                p = len(beta_nonzero[rep])
+
+                rows.append({
+                    "Seed": seed,
+                    "k": k,
+                    "Method": "CLS",
+                    "Replication": rep+1,
+                    "HitPercentage": len(cls_hits[rep]) / p * 100,
+                    "BetaShare": cls_share[rep]
+                })
+                rows.append({
+                    "Seed": seed,
+                    "k": k,
+                    "Method": "LS",
+                    "Replication": rep+1,
+                    "HitPercentage": len(ls_hits[rep]) / p * 100,
+                    "BetaShare": ls_share[rep]
+                })
+                rows.append({
+                    "Seed": seed,
+                    "k": k,
+                    "Method": "RS",
+                    "Replication": rep+1,
+                    "HitPercentage": len(rs_hits[rep]) / p * 100,
+                    "BetaShare": rs_share[rep]
+                })
+                rows.append({
+                    "Seed": seed,
+                    "k": k,
+                    "Method": "CS",
+                    "Replication": rep+1,
+                    "HitPercentage": len(cs_hits[rep]) / p * 100,
+                    "BetaShare": cs_share[rep]
+                })
+
+    df = pd.DataFrame(rows)
+    df["k"] = df["k"].astype("category")
+    return df
+
+def plot_screening_facets(df, metric="HitPercentage", aggregate="raw"):
+    metric_label = {
+        "HitPercentage": "Hit Percentage (%)",
+        "BetaShare": "Beta Share (%)"
+    }[metric]
+
+    if aggregate == "raw":
+        df_plot = df
+    elif aggregate == "mean":
+        df_plot = df.groupby(["Seed", "k", "Method"])[metric].mean().reset_index()
+    elif aggregate == "median":
+        df_plot = df.groupby(["Seed", "k", "Method"])[metric].median().reset_index()
+    else:
+        raise ValueError("aggregate must be raw/mean/median")
+
+    # facet by method
+    p_method = (
+        ggplot(df_plot, aes(x="k", y=metric, fill="Method"))
+        + geom_boxplot()
+        + facet_wrap("~ Method", scales="fixed")
+        + theme_minimal()
+        + labs(
+            title=f"{metric_label} per Method across k (aggregate={aggregate})",
+            x="k",
+            y=metric_label
+        )
+    )
+
+    # facet by k
+    p_k = (
+        ggplot(df_plot, aes(x="Method", y=metric, fill="Method"))
+        + geom_boxplot()
+        + facet_wrap("~ k", scales="fixed")
+        + theme_minimal()
+        + labs(
+            title=f"{metric_label} per k across Methods (aggregate={aggregate})",
+            x="Method",
+            y=metric_label
+        )
+    )
+
+    display(p_method)
+    display(p_k)

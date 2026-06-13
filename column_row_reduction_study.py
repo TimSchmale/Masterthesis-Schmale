@@ -209,9 +209,8 @@ def compute_scores(k, X_list, y_list):
         time_scores["RS"].append(time.perf_counter() - start)
 
         # CS: Combined LS/CLS scores
-        start = time.perf_counter()
-        scores["CS"].append(get_combined_scores(X, y, k, p_leverage=0.2))
-        time_scores["CS"].append(time.perf_counter() - start)
+        scores["CS"].append(get_combined_scores(X, y, k, p_leverage=0.2, ls=scores["LS"][i], cls=np.abs(scores["CLS"][i])))
+        time_scores["CS"].append(time_scores["CLS"][i] + time_scores["LS"][i])
 
     return scores, time_scores
 
@@ -321,67 +320,65 @@ def linear_modeling(C, R, X_train_list, X_test_list, y_train_list, y_test_list):
     rmse_train = {"LS": [], "CLS": [], "RS": [], "CS": []}
     rmse_test = {"LS": [], "CLS": [], "RS": [], "CS": []}
 
+    # initialize time containers
+    time_model = {"LS": [], "CLS": [], "RS": [], "CS": []}
+
     # iterate over datasets
     for i in range(n_reps):
 
         # catch the optional row reduction
         if R is not None:
-            # models based on row reduced matrix
-            models = {
-                "LS": LinearRegression().fit(R["LS"][i]["R"], R["LS"][i]["y"]),
-                "CLS": LinearRegression().fit(R["CLS"][i]["R"], R["CLS"][i]["y"]),
-                "RS": LinearRegression().fit(R["RS"][i]["R"], R["RS"][i]["y"]),
-                "CS": LinearRegression().fit(R["CS"][i]["R"], R["CS"][i]["y"])
-            }
 
-            # predict and evaluate model performance with RMSE
-            for key in ("LS", "CLS", "RS", "CS"):
-                cols = C[key][i]["selected_columns"]
+            # loop over methods
+            for method in ["LS", "CLS", "RS", "CS"]:
 
-                # train set
+                t0 = time.perf_counter()
+                model = LinearRegression().fit(R[method][i]["R"], R[method][i]["y"])
+                time_model[method].append(time.perf_counter() - t0)
+
+                # get selected columns
+                cols = C[method][i]["selected_columns"]
+
+                # compute train RMSE
                 X_train_red = X_train_list[i][:, cols]
-                preds_train = models[key].predict(X_train_red)
-                rmse_train[key].append(
+                preds_train = model.predict(X_train_red)
+                rmse_train[method].append(
                     np.sqrt(mean_squared_error(y_train_list[i], preds_train))
                 )
 
-                # test set
+                # compute test RMSE
                 X_test_red = X_test_list[i][:, cols]
-                preds_test = models[key].predict(X_test_red)
-                rmse_test[key].append(
+                preds_test = model.predict(X_test_red)
+                rmse_test[method].append(
                     np.sqrt(mean_squared_error(y_test_list[i], preds_test))
                 )
 
         else:
             y_tr = y_train_list[i]
 
-            # models on matrices without row reduction
-            models = {
-                "LS": LinearRegression().fit(C["LS"][i]["C"], y_tr),
-                "CLS": LinearRegression().fit(C["CLS"][i]["C"], y_tr),
-                "RS": LinearRegression().fit(C["RS"][i]["C"], y_tr),
-                "CS": LinearRegression().fit(C["CS"][i]["C"], y_tr)
-            }
+            # loop over methods
+            for method in ["LS", "CLS", "RS", "CS"]:
+                t0 = time.perf_counter()
+                model = LinearRegression().fit(C[method][i]["C"], y_tr)
+                time_model[method].append(time.perf_counter() - t0)
 
-            # predict and evaluate model performance with RMSE
-            for key in ("LS", "CLS", "RS", "CS"):
-                cols = C[key][i]["selected_columns"]
+                cols = C[method][i]["selected_columns"]
 
                 # train
                 X_train_red = X_train_list[i][:, cols]
-                preds_train = models[key].predict(X_train_red)
-                rmse_train[key].append(
+                preds_train = model.predict(X_train_red)
+                rmse_train[method].append(
                     np.sqrt(mean_squared_error(y_train_list[i], preds_train))
                 )
 
                 # test
                 X_test_red = X_test_list[i][:, cols]
-                preds_test = models[key].predict(X_test_red)
-                rmse_test[key].append(
+                preds_test = model.predict(X_test_red)
+                rmse_test[method].append(
                     np.sqrt(mean_squared_error(y_test_list[i], preds_test))
                 )
 
-    return rmse_train, rmse_test
+    return rmse_train, rmse_test, time_model
 
 def compute_full_rmse(X_train_list, X_test_list, y_train_list, y_test_list, base, folder):
     """
@@ -556,6 +553,7 @@ def apply_row_after_col_reduction(
                 return {
                     "scores": scores,
                     "time_scores": time_scores,
+                    "time_model": {m: [np.nan] * len(X_train_list) for m in ["LS", "CLS", "RS", "CS"]},
                     "selected_columns": None,
                     "selected_rows": None,
                     "rmse_train": {m: [np.nan] * len(X_train_list) for m in ["LS", "CLS", "RS", "CS"]},
@@ -564,7 +562,7 @@ def apply_row_after_col_reduction(
 
     # perform linear modeling
     print("Fitting linear models on reduced data...")
-    rmse_train, rmse_test = linear_modeling(
+    rmse_train, rmse_test, time_model = linear_modeling(
         C=C,
         R=R,
         X_train_list=X_train_list,
@@ -604,6 +602,7 @@ def apply_row_after_col_reduction(
     return {
         "scores": scores,
         "time_scores": time_scores,
+        "time_model": time_model,
         "selected_columns": selected_columns_clean,
         "selected_rows": selected_rows_clean,
         "rmse_train": rmse_train,
@@ -663,7 +662,9 @@ def run_sampling_variance_row_after_col(
         test_size=0.2,
         save_name=None,
         results_folder=None,
-        row_reduction=True
+        row_reduction=True,
+        seed_from=1,
+        seed_to=None
 ):
     """
     Run the sampling-variance study for the importance-based subsampling procedure.
@@ -695,8 +696,12 @@ def run_sampling_variance_row_after_col(
     # initialize the results
     results = {}
 
+    # default seed_to
+    if seed_to is None:
+        seed_to = outer_reps
+
     # iterate over the seeds
-    for seed in range(1, outer_reps + 1):
+    for seed in range(seed_from, seed_to + 1):
 
         print(f"\n============================================================")
         print(f"Running seed = {seed}")
@@ -761,6 +766,10 @@ def run_sampling_variance_row_after_col(
             rmse_test = out["rmse_test"]
             rmse_train = out["rmse_train"]
 
+            # extract further structural information
+            time_scores = out["time_scores"]
+            time_model = out["time_model"]
+
             # summarize the errors
             loss_summary = {
                 method: {
@@ -781,6 +790,26 @@ def run_sampling_variance_row_after_col(
                 for method in rmse_train.keys()
             }
 
+            # summarize the time for score calculation
+            score_time_summary = {
+                method: {
+                    "raw": time_scores[method],
+                    "mean": float(np.mean(time_scores[method])),
+                    "median": float(np.median(time_scores[method]))
+                }
+                for method in time_scores.keys()
+            }
+
+            # same for modeling time
+            model_time_summary = {
+                method: {
+                    "raw": time_model[method],
+                    "mean": float(np.mean(time_model[method])),
+                    "median": float(np.median(time_model[method]))
+                }
+                for method in time_model.keys()
+            }
+
             # store everything
             results[seed][k] = {
                 "loss": loss_summary,
@@ -788,7 +817,8 @@ def run_sampling_variance_row_after_col(
                 "selected_columns": out["selected_columns"],
                 "selected_rows": out["selected_rows"],
                 "scores": out["scores"],
-                "time_scores": out["time_scores"]
+                "time_scores": score_time_summary,
+                "time_model": model_time_summary
             }
 
         # Save seed results

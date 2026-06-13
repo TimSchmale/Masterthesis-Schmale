@@ -42,18 +42,11 @@ def row_reduction(k, X, y, gaussian=False):
         Corresponding sketched response vector.
     """
 
-
-    # convert X to numpy array
-    X = X.to_numpy() if isinstance(X, pd.DataFrame) else np.asarray(X)
-
-    # convert y to numpy column vector
-    y = y.to_numpy().reshape(-1, 1) if isinstance(y, (pd.Series, pd.DataFrame)) else y.reshape(-1, 1)
-
     # extract dimensions
     n, d = X.shape
 
     # compute sketch size
-    r = int(np.ceil(k * np.log(d)))
+    r = int(np.ceil(2 * k * np.log(d)))
 
     # allocate output matrices
     R = np.zeros((r, d))
@@ -240,9 +233,8 @@ def data_reduction(k, df_train, y_train, gaussian=False):
         time_scores["RS"].append(time.perf_counter() - start)
 
         # compute CS scores
-        start = time.perf_counter()
-        scores["CS"].append(get_combined_scores(R, y, k, p_leverage=0.2))
-        time_scores["CS"].append(time.perf_counter() - start)
+        scores["CS"].append(get_combined_scores(R, y, k, p_leverage=0.2, ls=scores["LS"][i], cls=np.abs(scores["CLS"][i])))
+        time_scores["CS"].append(time_scores["LS"][i] + time_scores["CLS"][i])
 
     # perform column reduction for each replication
     for i in range(n_reps):
@@ -315,14 +307,12 @@ def linear_modeling(selected_columns, R_list, y_list, df_train, df_test, y_train
         Model fitting times per method.
     """
 
-
     # determine number of replications
     n_reps = len(df_test)
 
     # initialize RMSE containers
     rmse_train = {"LS": [], "CLS": [], "RS": [], "CS": []}
     rmse_test = {"LS": [], "CLS": [], "RS": [], "CS": []}
-    time_model = {"LS": [], "CLS": [], "RS": [], "CS": []}
 
     # initialize time containers
     time_model = {"LS": [], "CLS": [], "RS": [], "CS": []}
@@ -342,14 +332,14 @@ def linear_modeling(selected_columns, R_list, y_list, df_train, df_test, y_train
             time_model[method].append(time.perf_counter() - t0)
 
             # compute train RMSE
-            X_train_red = df_train[i].to_numpy()[:, cols]
+            X_train_red = df_train[i][:, cols]
             preds_train = model.predict(X_train_red)
             rmse_train[method].append(
                 np.sqrt(mean_squared_error(y_train[i], preds_train))
             )
 
             # compute test RMSE
-            X_test_red = df_test[i].to_numpy()[:, cols]
+            X_test_red = df_test[i][:, cols]
             preds_test = model.predict(X_test_red)
             rmse_test[method].append(
                 np.sqrt(mean_squared_error(y_test[i], preds_test))
@@ -408,12 +398,12 @@ def compute_full_rmse(df_train, df_test, y_train, y_test, base, folder):
         selected = np.where(beta != 0)[0]
 
         # extract relevant columns
-        X_train = df_train[i].to_numpy()[:, selected]
-        X_test = df_test[i].to_numpy()[:, selected]
+        X_train = df_train[i][:, selected]
+        X_test = df_test[i][:, selected]
 
         # extract responses
-        y_tr = y_train[i].to_numpy().reshape(-1)
-        y_te = y_test[i].to_numpy().reshape(-1)
+        y_tr = y_train[i].reshape(-1)
+        y_te = y_test[i].reshape(-1)
 
         # fit benchmark model
         model = LinearRegression().fit(X_train, y_tr)
@@ -711,21 +701,30 @@ def run_sampling_variance_col_after_row(
                 y_test_list=y_test_list,
                 base=base,
                 folder=folder,
-                reps=reps,
                 gaussian=gaussian
             )
 
             if out["scores"] is None:
                 # Soft abort
+                nan_dict = {
+                    method: {
+                        "raw": out["rmse_test"][method],
+                        "mean": float(np.nanmean(out["rmse_test"][method])),
+                        "median": float(np.nanmedian(out["rmse_test"][method]))
+                    }
+                    for method in out["rmse_test"].keys()
+                }
+
                 results[seed][k] = {
-                    "loss": out["rmse_test"],
-                    "train_loss": out["rmse_train"],
+                    "loss": nan_dict,
+                    "train_loss": nan_dict,
                     "selected_columns": None,
                     "selected_rows": None,
                     "scores": None,
                     "time_scores": None,
                     "time_model": None,
                 }
+
                 continue
 
             # extract RMSE values
@@ -801,5 +800,4 @@ def run_sampling_variance_col_after_row(
 
         print(f"Saved seed {seed} → {seed_file}")
 
-    # return full sampling variance structure
     return results

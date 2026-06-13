@@ -65,10 +65,12 @@ def plot_facets_all(results_dict, k_vector, dataset, metric="brier", save_path=N
             loss_dict = results_dict[k]["brierloss"]
         elif metric == "rmse":
             loss_dict = results_dict[k]["rmse"]
-        elif metric == "time":
+        elif metric == "time_scores":
             loss_dict = results_dict[k]["time_scores"]
+        elif metric == "time_model":
+            loss_dict = results_dict[k]["time_model"]
         else:
-            raise ValueError("metric must be 'brier', 'rmse' or 'time'")
+            raise ValueError("metric must be 'brier', 'rmse', 'time_model' or 'time_scores'")
 
         # determine number of replications
         n_reps = len(next(iter(loss_dict.values())))
@@ -96,7 +98,8 @@ def plot_facets_all(results_dict, k_vector, dataset, metric="brier", save_path=N
     metric_name = {
         "brier": "Brier Score",
         "rmse": "RMSE",
-        "time": "Score Calculation Time"
+        "time_scores": "Score Calculation Time",
+        "time_model": "Modeling Time"
     }[metric]
 
     # remove Full model for method-facet plot
@@ -146,139 +149,251 @@ def plot_facets_all(results_dict, k_vector, dataset, metric="brier", save_path=N
     display(p_method)
     display(p_k)
 
-def _derive_counts_from_entry(entry):
+def plot_facets_all_seeds(results, k_vector, dataset, metric="rmse", aggregate="raw", save_path=None):
+    """
+    Facet-based boxplots aggregated across seeds, replications, methods, and k.
+
+    Supported metrics:
+        - "rmse"  -> results[seed][k]["loss"][method]["raw"]
+        - "time"  -> results[seed][k]["time_scores"][method]
+        - "brier" -> results[seed][k]["brier"][method]["raw"] (if present)
+
+    aggregate:
+        - "raw"   -> plot all replication values
+        - "mean"  -> plot mean per (seed, k, method)
+        - "median"-> plot median per (seed, k, method)
+    """
+
+    # filter k_vector to only those present in results
+    valid_k = []
+    for k in k_vector:
+        ok = True
+        for seed in results.keys():
+            for method in results[seed][k]["loss"].keys():
+                vals = results[seed][k]["loss"][method]["raw"]
+                if any(np.isnan(vals)):
+                    ok = False
+                    break
+            if not ok:
+                break
+        if ok:
+            valid_k.append(k)
+
+    k_vector = valid_k
+
+    rows = []
+
+    for seed in results.keys():
+        for k in k_vector:
+
+            # select metric dictionary
+            if metric == "rmse":
+                metric_dict = results[seed][k]["loss"]
+            elif metric == "time_scores":
+                metric_dict = results[seed][k]["time_scores"]
+            elif metric == "time_model":
+                metric_dict = results[seed][k]["time_model"]
+            elif metric == "brier":
+                metric_dict = results[seed][k]["brier"]
+            else:
+                raise ValueError("metric must be 'rmse', 'time_scores', or 'brier'.")
+
+            for method, entry in metric_dict.items():
+
+                # extract values
+                if metric in ["rmse", "brier", "time_scores", "time_model"]:
+                    values = entry["raw"]
+
+                # aggregate
+                if aggregate == "raw":
+                    for rep_idx, val in enumerate(values):
+                        rows.append({
+                            "Seed": seed,
+                            "k": k,
+                            "Method": method,
+                            "Replication": rep_idx + 1,
+                            "Loss": val
+                        })
+
+                elif aggregate == "mean":
+                    rows.append({
+                        "Seed": seed,
+                        "k": k,
+                        "Method": method,
+                        "Replication": None,
+                        "Loss": float(np.mean(values))
+                    })
+
+                elif aggregate == "median":
+                    rows.append({
+                        "Seed": seed,
+                        "k": k,
+                        "Method": method,
+                        "Replication": None,
+                        "Loss": float(np.median(values))
+                    })
+
+                else:
+                    raise ValueError("aggregate must be 'raw', 'mean', or 'median'.")
+
+    df = pd.DataFrame(rows)
+    df["k"] = df["k"].astype("category")
+
+    # Full model only exists for rmse/brier
+    if metric in ["rmse", "brier"]:
+        df_no_full = df[df["Method"] != "Full"]
+    else:
+        df_no_full = df
+
+    metric_name = {
+        "rmse": "RMSE",
+        "time_scores": "Score Computation Time (s)",
+        "brier": "Brier Score",
+        "time_model": "Modeling Time (s)",
+    }[metric]
+
+    # facet by method
+    p_method = (
+        ggplot(df_no_full, aes(x="k", y="Loss", fill="Method"))
+        + geom_boxplot()
+        + facet_wrap("~ Method", scales="fixed")
+        + theme_bw()
+        + theme(figure_size=(18, 20))
+        + labs(
+            title=f"{metric_name} per Method across k (aggregate={aggregate})",
+            x="k",
+            y=metric_name
+        )
+    )
+
+    # facet by k
+    p_k = (
+        ggplot(df, aes(x="Method", y="Loss", fill="Method"))
+        + geom_boxplot()
+        + facet_wrap("~ k", scales="fixed")
+        + theme_bw()
+        + theme(figure_size=(18, 20))
+        + labs(
+            title=f"{metric_name} per k across Methods (aggregate={aggregate})",
+            x="Method",
+            y=metric_name
+        )
+    )
+
+    if save_path is not None:
+        os.makedirs(save_path, exist_ok=True)
+        p_method.save(os.path.join(save_path, f"facet_method_{metric}_{dataset}_{aggregate}.pdf"))
+        p_k.save(os.path.join(save_path, f"facet_k_{metric}_{dataset}_{aggregate}.pdf"))
+        print("Plots saved.")
+
+    display(p_method)
+    display(p_k)
+
+def extract_dimensions(entry):
     """
     Extract selected column and row counts from a results entry.
-
-    The function supports both explicit count fields and raw lists of
-    selected indices, falling back to the latter if counts are missing.
+    Works for both Row→Column and Column→Row pipelines.
     """
 
-    # extract column counts if available
-    sel_cols = entry.get("selected_columns_counts", None)
+    sel_cols = {}
+    sel_rows = {}
 
-    # extract row counts if available
-    sel_rows = entry.get("selected_rows_counts", None)
+    # --- Columns ---
+    C = entry.get("selected_columns", None)
+    if isinstance(C, dict):
+        for method, rep_lists in C.items():
+            if isinstance(rep_lists, list):
+                sel_cols[method] = [
+                    len(cols) if isinstance(cols, list) else np.nan
+                    for cols in rep_lists
+                ]
 
-    # fallback: use raw selected column indices
-    if sel_cols is None and "selected_columns" in entry:
-        sel_cols = entry["selected_columns"]
+    # --- Rows ---
+    R = entry.get("selected_rows", None)
+    if isinstance(R, dict):
+        for method, rep_lists in R.items():
+            if isinstance(rep_lists, list):
+                sel_rows[method] = [
+                    len(rows) if isinstance(rows, list) else np.nan
+                    for rows in rep_lists
+                ]
 
-    # fallback: use raw selected row indices
-    if sel_rows is None and "selected_rows" in entry:
-        sel_rows = entry["selected_rows"]
+    if len(sel_cols) == 0:
+        return None, None
 
     return sel_cols, sel_rows
-
-def plot_dimension_comparison(results_dict, k_vector, show_median_lines=True, ncol=2):
+def plot_dimension_facets(results, k_vector, ncol=2):
     """
-    Visualize selected column and row counts across k and methods.
-
-    The function extracts selection counts, reshapes them into long format,
-    and produces boxplots faceted by method. Optional median lines can be
-    added for clearer trend visualization.
+    Faceted visualization of selected column and row counts across k and methods.
+    Compatible with both Row→Column and Column→Row pipelines.
     """
 
-    # collect long-format rows for all k values
     rows = []
-    for k in k_vector:
 
-        # ensure k exists in results
-        if k not in results_dict:
-            raise KeyError(f"k={k} nicht in results_dict vorhanden.")
+    for seed in results.keys():
+        for k in k_vector:
 
-        # extract counts for this k
-        entry = results_dict[k]
-        sel_cols, sel_rows = _derive_counts_from_entry(entry)
+            if k not in results[seed]:
+                print(f"[WARN] seed={seed}, k={k} fehlt – übersprungen.")
+                continue
 
-        if sel_cols is None:
-            raise ValueError(f"Keine selected_columns_counts oder C für k={k} gefunden.")
+            entry = results[seed][k]
+            sel_cols, sel_rows = extract_dimensions(entry)
 
-        # iterate over methods and replications
-        for method, col_counts in sel_cols.items():
+            if sel_cols is None:
+                print(f"[WARN] seed={seed}, k={k} hat keine gültigen selected_columns – übersprungen.")
+                continue
 
-            # extract row counts if available
-            row_counts = sel_rows.get(method, [np.nan] * len(col_counts)) if sel_rows is not None else [np.nan] * len(col_counts)
+            for method, col_counts in sel_cols.items():
 
-            # build long-format rows
-            for rep_idx, (cc, rc) in enumerate(zip(col_counts, row_counts), start=1):
-                rows.append({
-                    "k": int(k),
-                    "k_str": str(k),
-                    "Method": method,
-                    "Replication": rep_idx,
-                    "SelectedColumns": int(cc) if not np.isnan(cc) else np.nan,
-                    "SelectedRows": int(rc) if not np.isnan(rc) else np.nan
-                })
+                # row counts fallback
+                if sel_rows is not None and method in sel_rows:
+                    row_counts = sel_rows[method]
+                else:
+                    row_counts = [np.nan] * len(col_counts)
 
-    # build DataFrame
-    df_counts = pd.DataFrame(rows)
-    if df_counts.empty:
-        raise ValueError("Keine Counts extrahiert. Prüfe results_dict Struktur.")
+                for rep_idx, (cc, rc) in enumerate(zip(col_counts, row_counts), start=1):
+                    rows.append({
+                        "Seed": seed,
+                        "k": k,
+                        "k_str": str(k),
+                        "Method": method,
+                        "Replication": rep_idx,
+                        "SelectedColumns": cc,
+                        "SelectedRows": rc
+                    })
 
-    # enforce categorical ordering for k
-    k_order = sorted(df_counts["k"].unique())
-    k_labels = [str(x) for x in k_order]
-    df_counts["k_str"] = pd.Categorical(df_counts["k_str"], categories=k_labels, ordered=True)
+    df = pd.DataFrame(rows)
+    if df.empty:
+        raise ValueError("Keine gültigen Dimensionen gefunden.")
 
-    # compute median lines for columns
-    med_cols = (
-        df_counts
-        .groupby(["Method", "k_str"], observed=True)["SelectedColumns"]
-        .median()
-        .reset_index()
-        .rename(columns={"SelectedColumns": "MedianSelectedColumns"})
-    )
+    # numerisch sortieren
+    k_sorted = sorted(df["k"].unique())  # echte numerische Sortierung
+    k_labels = [str(x) for x in k_sorted]  # Labels als Strings
 
-    # compute median lines for rows
-    med_rows = (
-        df_counts
-        .groupby(["Method", "k_str"], observed=True)["SelectedRows"]
-        .median()
-        .reset_index()
-        .rename(columns={"SelectedRows": "MedianSelectedRows"})
-    )
+    df["k_str"] = pd.Categorical(df["k_str"], categories=k_labels, ordered=True)
 
-    # create boxplot for selected columns
+    # Median lines
+    med_cols = df.groupby(["Method", "k_str"])["SelectedColumns"].median().reset_index()
+    med_rows = df.groupby(["Method", "k_str"])["SelectedRows"].median().reset_index()
+
+    # --- Columns ---
     p_cols = (
-        ggplot(df_counts, aes(x="k_str", y="SelectedColumns"))
+        ggplot(df, aes(x="k_str", y="SelectedColumns"))
         + geom_boxplot(aes(fill="Method"))
-        + facet_wrap("~Method", ncol=ncol, scales="fixed")
-        + labs(title="Selected Columns per k and Method", x="k", y="Anzahl ausgewählte Spalten")
+        + facet_wrap("~Method", ncol=ncol)
         + theme_minimal()
-        + theme(axis_text_x=element_text(rotation=45, hjust=1))
+        + labs(title="Selected Columns per k and Method", x="k", y="Columns")
     )
 
-    # add median lines if enabled
-    if show_median_lines:
-        p_cols = p_cols + geom_line(
-            data=med_cols, mapping=aes(x="k_str", y="MedianSelectedColumns", group=1),
-            color="orange", size=1
-        ) + geom_point(
-            data=med_cols, mapping=aes(x="k_str", y="MedianSelectedColumns"),
-            color="orange", size=2
-        )
-
-    # create boxplot for selected rows
+    # --- Rows ---
     p_rows = (
-        ggplot(df_counts, aes(x="k_str", y="SelectedRows"))
+        ggplot(df, aes(x="k_str", y="SelectedRows"))
         + geom_boxplot(aes(fill="Method"))
-        + facet_wrap("~Method", ncol=ncol, scales="fixed")
-        + labs(title="Selected Rows per k and Method", x="k", y="Anzahl ausgewählte Zeilen")
+        + facet_wrap("~Method", ncol=ncol)
         + theme_minimal()
-        + theme(axis_text_x=element_text(rotation=45, hjust=1))
+        + labs(title="Selected Rows per k and Method", x="k", y="Rows")
     )
 
-    # add median lines if enabled
-    if show_median_lines:
-        p_rows = p_rows + geom_line(
-            data=med_rows, mapping=aes(x="k_str", y="MedianSelectedRows", group=1),
-            color="darkgreen", size=1
-        ) + geom_point(
-            data=med_rows, mapping=aes(x="k_str", y="MedianSelectedRows"),
-            color="darkgreen", size=2
-        )
-
-    # display both plots
     display(p_cols)
     display(p_rows)
