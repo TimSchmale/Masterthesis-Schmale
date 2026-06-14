@@ -569,7 +569,9 @@ def run_sampling_variance_lasso_after_row_reduction(
     test_size=0.2,
     save_name=None,
     results_folder=None,
-    gaussian=False
+    gaussian=False,
+    seed_from=1,
+    seed_to=None
 ):
     """
     Sampling variance analysis for the row-reduced Lasso pipeline.
@@ -624,7 +626,12 @@ def run_sampling_variance_lasso_after_row_reduction(
     # initialize the results
     results = {}
 
-    for seed in range(1, outer_reps + 1):
+    # default seed_to
+    if seed_to is None:
+        seed_to = outer_reps
+
+    # iterate over the seeds
+    for seed in range(seed_from, seed_to + 1):
 
         print(f"\n============================================================")
         print(f"Running seed = {seed}")
