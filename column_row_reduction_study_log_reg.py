@@ -6,6 +6,7 @@ import numpy as np
 from sklearn.metrics import brier_score_loss, log_loss
 import time
 from visualizations import *
+import pickle
 
 def column_reduction(X, scores, k):
     """
@@ -175,86 +176,133 @@ def row_reduction(C, y, mu, k):
         "r": r
     }
 
-def data_reduction(k, df_train, y_train, row_reduce=True):
+def compute_scores(k, X_list, y_list):
     """
-    Compute score vectors and perform column and optional row reduction.
+    Compute all column-based score vectors once per replication for a fixed rank k.
 
-    This function computes LS, CLS, RS, and CS scores for each
-    replication. Column reduction is performed using EXPECTED(c)
-    sampling. If enabled, row reduction is performed using logistic
-    coreset sampling. Only selected indices and score vectors are
-    returned to keep memory usage minimal.
+    This function precomputes the four score types used in the CUR pipeline:
+    - LS  : Column leverage scores (SVD-based)
+    - CLS : Cross-leverage scores (augmented QR-based)
+    - RS  : Random scores (uniform reference baseline)
+    - CS  : Combined LS/CLS scores (weighted mixture)
+
+    Since X_list and y_list do not change across seeds, these scores can be
+    cached and reused for all outer repetitions. This eliminates redundant
+    score computation inside the main sampling-variance loop..
 
     Parameters
     ----------
     k : int
-        Target rank.
-    df_train : list of DataFrames
-        Training matrices.
-    y_train : list of Series
-        Binary response vectors.
-    row_reduce : bool
-        Whether row reduction should be applied.
+        Target rank for the CUR approximation. Affects LS and CS scores.
+    X_list : list of DataFrames
+        Full design matrices for all replications (before train/test splitting).
+    y_list : list of DataFrames or Series
+        Full response vectors for all replications.
 
     Returns
     -------
     tuple
-        (scores, time_scores, selected_columns, selected_rows, mu_values)
+        scores : dict
+            Dictionary with keys {"LS", "CLS", "RS", "CS"}.
+            Each entry is a list of score vectors, one per replication.
+        time_scores : dict
+            Dictionary with the same keys, containing the computation
+            time (in seconds) for each score vector.
+    """
+    print(f"computing scores for k={k}...")
+    # Initialize containers for score vectors and timing information
+    scores = {"LS": [], "CLS": [], "RS": [], "CS": []}
+    time_scores = {"LS": [], "CLS": [], "RS": [], "CS": []}
+
+    # Loop over all replications (X1..X_10)
+    for i in range(len(X_list)):
+        X = X_list[i]
+        y = y_list[i]
+
+        # LS: Column leverage scores
+        start = time.perf_counter()
+        scores["LS"].append(get_column_leverage_scores(X, k))
+        time_scores["LS"].append(time.perf_counter() - start)
+
+        # CLS: Cross-leverage scores
+        start = time.perf_counter()
+        scores["CLS"].append(get_cross_leverage_scores(X, y))
+        time_scores["CLS"].append(time.perf_counter() - start)
+
+        # RS: Random scores
+        start = time.perf_counter()
+        scores["RS"].append(get_random_scores(X))
+        time_scores["RS"].append(time.perf_counter() - start)
+
+        # CS: Combined LS/CLS scores
+        scores["CS"].append(get_combined_scores(X, y, k, p_leverage=0.2, ls=scores["LS"][i], cls=np.abs(scores["CLS"][i])))
+        time_scores["CS"].append(time_scores["CLS"][i] + time_scores["LS"][i])
+
+    return scores, time_scores
+
+def data_reduction(
+    k,
+    df_train,
+    y_train,
+    row_reduce=True,
+    cached_scores=None,
+    cached_time_scores=None,
+    cached_mu_values=None
+):
+    """
+    Corrected and robust version of the data reduction step.
     """
 
     n_reps = len(df_train)
 
-    # containers for scores and times
-    scores = {"LS": [], "CLS": [], "RS": [], "CS": []}
-    time_scores = {"LS": [], "CLS": [], "RS": [], "CS": []}
-
-    # containers for selected indices
-    selected_columns = {"LS": [], "CLS": [], "RS": [], "CS": []}
-    selected_rows = {"LS": [], "CLS": [], "RS": [], "CS": []} if row_reduce else None
-    mu_values = {"LS": [], "CLS": [], "RS": [], "CS": []}
-
-    # score computation
-    for i in range(n_reps):
-        X = df_train[i]
-        y = y_train[i]
-
-        for method, func in {
-            "LS": lambda: get_column_leverage_scores(X, k),
-            "CLS": lambda: get_cross_leverage_scores(X, y),
-            "RS": lambda: get_random_scores(X),
-            "CS": lambda: get_combined_scores(X, y, k, p_leverage=0.2)
-        }.items():
-
-            start = time.perf_counter()
-            s = func()
-            time_scores[method].append(time.perf_counter() - start)
-            scores[method].append(s)
+    # Pass-through of cached score information
+    scores = cached_scores
+    time_scores = cached_time_scores
+    mu_values = cached_mu_values
 
     # column reduction
     C_mats = {m: [] for m in scores}
+
     for i in range(n_reps):
         X = df_train[i]
         for method in scores:
             out = column_reduction(X, np.abs(scores[method][i]), k)
-            C_mats[method].append(out["C"])
-            selected_columns[method].append(out["selected_columns"])
+            C_mats[method].append({
+                "C": out["C"],
+                "selected_columns": out["selected_columns"]
+            })
 
     # row reduction
+    R_mats = {m: [] for m in scores}
+
     if row_reduce:
         for i in range(n_reps):
             y = y_train[i]
             for method in scores:
-                C = C_mats[method][i]
 
+                C = C_mats[method][i]["C"]
+
+                # compute mu
                 mu = estimate_mu(C, y)
                 mu_values[method].append(mu)
 
+                # row reduction
                 R_out = row_reduction(C, y, mu, k)
-                selected_rows[method].append(R_out["selected_rows"])
 
-    return scores, time_scores, selected_columns, selected_rows, mu_values
+                R_mats[method].append({
+                    "R": R_out["R"],
+                    "y": R_out["y"],
+                    "selected_rows": R_out["selected_rows"],
+                    "mu": mu,
+                    "r": R_out["r"]
+                })
+    else:
+        R_mats = None
 
-def logistic_modeling(selected_columns, selected_rows, df_train, df_test, y_train, y_test):
+    return scores, time_scores, mu_values, C_mats, R_mats
+
+
+def logistic_modeling(C, R, X_train_list, X_test_list, y_train_list, y_test_list):
     """
     Fit logistic regression models on reduced data and compute Brier
     and cross-entropy losses.
@@ -283,7 +331,7 @@ def logistic_modeling(selected_columns, selected_rows, df_train, df_test, y_trai
         (brier_train, brier_test, ce_train, ce_test)
     """
 
-    n_reps = len(df_train)
+    n_reps = len(X_test_list)
 
     brier_train = {"LS": [], "CLS": [], "RS": [], "CS": []}
     brier_test  = {"LS": [], "CLS": [], "RS": [], "CS": []}
@@ -291,43 +339,67 @@ def logistic_modeling(selected_columns, selected_rows, df_train, df_test, y_trai
     ce_train = {"LS": [], "CLS": [], "RS": [], "CS": []}
     ce_test  = {"LS": [], "CLS": [], "RS": [], "CS": []}
 
+    # initialize time containers
+    time_model = {"LS": [], "CLS": [], "RS": [], "CS": []}
+
     # loop over replications
     for i in range(n_reps):
-        for method in selected_columns:
 
-            cols = selected_columns[method][i]
+        # catch the optional row reduction
+        if R is not None:
 
-            # training subset
-            if selected_rows is not None:
-                rows = selected_rows[method][i]
-                X_train = df_train[i].to_numpy()[rows][:, cols]
-                y_tr = y_train[i].to_numpy().ravel()[rows]
-            else:
-                X_train = df_train[i].to_numpy()[:, cols]
-                y_tr = y_train[i].to_numpy().ravel()
+            # loop over methods
+            for method in ["LS", "CLS", "RS", "CS"]:
+                t0 = time.perf_counter()
+                model = LogisticRegression().fit(R[method][i]["R"], R[method][i]["y"])
+                time_model[method].append(time.perf_counter() - t0)
 
-            # fit logistic regression
-            model = LogisticRegression(
-                l1_ratio=0,
-                C=np.inf,
-                solver='lbfgs',
-                max_iter=2000
-            ).fit(X_train, y_tr)
+                # get selected columns
+                cols = C[method][i]["selected_columns"]
 
-            # train predictions
-            pred_train = model.predict_proba(X_train)[:, 1]
-            brier_train[method].append(brier_score_loss(y_tr, pred_train))
-            ce_train[method].append(log_loss(y_tr, pred_train))
+                # compute train errors
+                X_train_red = X_train_list[i][:, cols]
+                pred_train = model.predict_proba(X_train_red)[:, 1]
+                brier_train[method].append(brier_score_loss(y_train_list[i], pred_train))
+                ce_train[method].append(log_loss(y_train_list[i], pred_train))
 
-            # test predictions
-            X_test = df_test[i].to_numpy()[:, cols]
-            pred_test = model.predict_proba(X_test)[:, 1]
-            brier_test[method].append(brier_score_loss(y_test[i], pred_test))
-            ce_test[method].append(log_loss(y_test[i], pred_test))
+                # compute test errors
+                X_test_red = X_test_list[i][:, cols]
+                pred_test = model.predict_proba(X_test_red)[:, 1]
+                brier_test[method].append(brier_score_loss(y_test_list[i], pred_test))
+                ce_test[method].append(log_loss(y_test_list[i], pred_test))
+
+        else:
+            # loop over methods
+            for method in ["LS", "CLS", "RS", "CS"]:
+                t0 = time.perf_counter()
+                model = LogisticRegression().fit(C[method][i]["C"], y_train_list[i])
+                time_model[method].append(time.perf_counter() - t0)
+
+                # get selected columns
+                cols = C[method][i]["selected_columns"]
+
+                # compute train errors
+                X_train_red = X_train_list[i][:, cols]
+                pred_train = model.predict_proba(X_train_red)[:, 1]
+                brier_train[method].append(brier_score_loss(y_train_list[i], pred_train))
+                ce_train[method].append(log_loss(y_train_list[i], pred_train))
+
+                # compute test errors
+                X_test_red = X_test_list[i][:, cols]
+                pred_test = model.predict_proba(X_test_red)[:, 1]
+                brier_test[method].append(brier_score_loss(y_test_list[i], pred_test))
+                ce_test[method].append(log_loss(y_test_list[i], pred_test))
 
     return brier_train, brier_test, ce_train, ce_test
 
-def compute_full_model(df_train, df_test, y_train, y_test, base, folder):
+def compute_full_model(
+        X_train_list,
+        X_test_list,
+        y_train_list,
+        y_test_list,
+        base,
+        folder):
     """
     Compute oracle Brier loss and cross-entropy loss using the true support of β.
 
@@ -360,14 +432,14 @@ def compute_full_model(df_train, df_test, y_train, y_test, base, folder):
     brier_full = []
     ce_full = []
 
-    for i in range(len(df_train)):
+    for i in range(len(X_train_list)):
 
         # load true beta
-        beta_df = pd.read_csv(f"{base}/{folder}/beta{i+1}.csv")
+        beta_df = pd.read_csv(f"{base}/{folder}/beta{i + 1}.csv")
         beta = beta_df.select_dtypes(include=[np.number]).to_numpy().reshape(-1)
 
         # ensure correct length
-        p = df_train[i].shape[1]
+        p = X_train_list[i].shape[1]
         if len(beta) > p:
             beta = beta[:p]
         elif len(beta) < p:
@@ -377,11 +449,11 @@ def compute_full_model(df_train, df_test, y_train, y_test, base, folder):
         selected = np.where(beta != 0)[0]
 
         # subset matrices
-        X_train = df_train[i].to_numpy()[:, selected]
-        X_test  = df_test[i].to_numpy()[:, selected]
+        X_train = X_train_list[i][:, selected]
+        X_test = X_test_list[i][:, selected]
 
-        y_tr = y_train[i].to_numpy().ravel()
-        y_te = y_test[i].to_numpy().ravel()
+        y_tr = y_train_list[i].ravel()
+        y_te = y_test_list[i].ravel()
 
         # fit logistic regression
         model = LogisticRegression(
@@ -400,8 +472,20 @@ def compute_full_model(df_train, df_test, y_train, y_test, base, folder):
 
     return brier_full, ce_full
 
-
-def apply_row_after_col_reduction_log(k, seed, base, folder, reps, row_reduction=True):
+def apply_row_after_col_reduction_log(
+        k,
+        seed,
+        X_train_list,
+        X_test_list,
+        y_train_list,
+        y_test_list,
+        base,
+        folder,
+        row_reduction=True,
+        cached_scores=None,
+        cached_time_scores=None,
+        cached_mu_values=None,
+):
     """
     Full logistic Column→Row reduction pipeline.
 
@@ -440,45 +524,90 @@ def apply_row_after_col_reduction_log(k, seed, base, folder, reps, row_reduction
             mu
     """
 
-    print("Reading in the simulation data...")
-    df_train = [pd.read_csv(f"{base}/{folder}/X_train{i+1}.csv") for i in range(reps)]
-    df_test  = [pd.read_csv(f"{base}/{folder}/X_test{i+1}.csv") for i in range(reps)]
-    y_train  = [pd.read_csv(f"{base}/{folder}/y_binary_train{i+1}.csv") for i in range(reps)]
-    y_test   = [pd.read_csv(f"{base}/{folder}/y_binary_test{i+1}.csv") for i in range(reps)]
+    reps = len(X_train_list)
 
-    print("Setting the seed...")
+    # set seed
+    print(f"Setting random seed inside importance-based reduction pipeline for log. regression (seed = {seed})...")
     random.seed(seed)
     np.random.seed(seed)
 
     print("Performing data reduction...")
-    scores, time_scores, selected_columns, selected_rows, mu_values = \
-        data_reduction(k, df_train, y_train, row_reduction)
+    scores, time_scores, mu_values, C, R = data_reduction(
+        k=k,
+        df_train=X_train_list,
+        y_train=y_train_list,
+        row_reduce=row_reduction,
+        cached_scores=cached_scores,
+        cached_time_scores=cached_time_scores,
+        cached_mu_values=cached_mu_values,
+    )
+
+    # Soft abort: check if any C has more columns than rows
+    for method in ["LS", "CLS", "RS", "CS"]:
+        for i in range(len(X_train_list)):
+            Cmat = C[method][i]["C"]
+            if Cmat.shape[1] > Cmat.shape[0]:
+                print(f"[WARN] Aborting k={k} for method={method}: "
+                      f"{Cmat.shape[1]} columns > {Cmat.shape[0]} rows. Skipping.")
+
+                # return a clean "empty" result for this k
+                return {
+                    "scores": scores,
+                    "time_scores": time_scores,
+                    "time_model": {m: [np.nan] * len(X_train_list) for m in ["LS", "CLS", "RS", "CS"]},
+                    "selected_columns": None,
+                    "selected_rows": None,
+                    "brier_train": {m: [np.nan] * len(X_train_list) for m in ["LS", "CLS", "RS", "CS"]},
+                    "brier_test": {m: [np.nan] * len(X_train_list) for m in ["LS", "CLS", "RS", "CS"]},
+                    "ce_train": {m: [np.nan] * len(X_train_list) for m in ["LS", "CLS", "RS", "CS"]},
+                    "ce_test": {m: [np.nan] * len(X_train_list) for m in ["LS", "CLS", "RS", "CS"]},
+                    "mu": mu_values
+                }
 
     print("Building logistic models...")
-    brier_train, brier_test, ce_train, ce_test = logistic_modeling(
-        selected_columns,
-        selected_rows,
-        df_train,
-        df_test,
-        y_train,
-        y_test
+    brier_train, brier_test, ce_train, ce_test, time_model = logistic_modeling(
+        C=C,
+        R=R,
+        X_train_list=X_train_list,
+        X_test_list=X_test_list,
+        y_train_list=y_train_list,
+        y_test_list=y_test_list
     )
 
     print("Building Full Model / Benchmark...")
     full_brier, full_ce = compute_full_model(
-        df_train, df_test, y_train, y_test, base, folder
+        X_train_list=X_train_list,
+        X_test_list=X_test_list,
+        y_train_list=y_train_list,
+        y_test_list=y_test_list,
+        base=base,
+        folder=folder,
     )
-
     brier_test["Full"] = full_brier
     ce_test["Full"] = full_ce
 
     print("Data Reduction & Modeling completed.")
 
+    # get selected columns/rows
+    selected_columns_clean = {
+        method: [C[method][i]["selected_columns"] for i in range(reps)]
+        for method in ["LS", "CLS", "RS", "CS"]
+    }
+
+    if row_reduction:
+        selected_rows_clean = {
+            method: [R[method][i]["selected_rows"] for i in range(reps)]
+            for method in ["LS", "CLS", "RS", "CS"]
+        }
+    else:
+        selected_rows_clean = None
+
     return {
         "scores": scores,
         "time_scores": time_scores,
-        "selected_columns": selected_columns,
-        "selected_rows": selected_rows,
+        "time_model": time_model,
+        "selected_columns": selected_columns_clean,
+        "selected_rows": selected_rows_clean,
         "brier_train": brier_train,
         "brier_test": brier_test,
         "ce_train": ce_train,
@@ -486,13 +615,62 @@ def apply_row_after_col_reduction_log(k, seed, base, folder, reps, row_reduction
         "mu": mu_values
     }
 
+def numpy_train_test_split(X, y, test_size, seed):
+    """
+    self-implemented NumPy-based train/test split.
+
+    Parameters
+    ----------
+    X : ndarray, shape (n, p)
+        design matrix.
+    y : ndarray, shape (n,)
+        response vector.
+    test_size : float
+        Fraction of samples assigned to the test set.
+    seed : int
+        Random seed for reproducibility.
+
+    Returns
+    -------
+    X_train, X_test, y_train, y_test : ndarray
+        Deterministic train/test split based on shuffled indices.
+    """
+
+    # get length of dataset
+    n = X.shape[0]
+
+    # determine train and test sizes
+    n_test = int(np.floor(n * test_size))
+    n_train = n - n_test
+
+    # shuffle the dataset indices
+    rng = np.random.default_rng(seed)
+    idx = np.arange(n)
+    rng.shuffle(idx)
+
+    # get the train and test dataset
+    train_idx = idx[:n_train]
+    test_idx = idx[n_train:]
+
+    return (
+        X[train_idx],
+        X[test_idx],
+        y[train_idx],
+        y[test_idx]
+    )
+
 def run_sampling_variance_row_after_col_log(
-    k,
+    k_vector,
     base,
     folder,
     reps=10,
     outer_reps=10,
-    row_reduction=True
+    test_size=0.2,
+    save_name=None,
+    results_folder=None,
+    row_reduction=True,
+    seed_from=1,
+    seed_to=None
 ):
     """
     Sampling variance analysis for the logistic Column→Row pipeline.
@@ -529,80 +707,186 @@ def run_sampling_variance_row_after_col_log(
         Nested dictionary containing sampling variance results for each seed.
     """
 
+    print("Loading all datasets...")
+
+    # Load all datasets
+    X_list = [
+        pd.read_csv(f"{base}/{folder}/X{i + 1}.csv").to_numpy()
+        for i in range(reps)
+    ]
+    y_list = [
+        pd.read_csv(f"{base}/{folder}/y_binary{i + 1}.csv").to_numpy().reshape(-1)
+        for i in range(reps)
+    ]
+
+    # initialize the results
     results = {}
 
-    for outer_seed in range(1, outer_reps + 1):
+    # default seed_to
+    if seed_to is None:
+        seed_to = outer_reps
 
-        print(f"Running outer repetition with seed = {outer_seed}")
+    # iterate over the seeds
+    for seed in range(seed_from, seed_to + 1):
+        print(f"\n============================================================")
+        print(f"Running seed = {seed}")
+        print("============================================================")
 
-        out = apply_row_after_col_reduction_log(
-            k=k,
-            seed=outer_seed,
-            base=base,
-            folder=folder,
-            reps=reps,
-            row_reduction=row_reduction
-        )
+        np.random.seed(seed + 42)
+        random.seed(seed + 42)
 
-        # extract components
-        scores = out["scores"]
-        time_scores = out["time_scores"]
-        selected_columns = out["selected_columns"]
-        selected_rows = out["selected_rows"]
-        brier_train = out["brier_train"]
-        brier_test = out["brier_test"]
+        # initialize Train/Test Split
+        X_train_list = []
+        X_test_list = []
+        y_train_list = []
+        y_test_list = []
+
+        # loop over the different datasets
+        for i in range(reps):
+            # create train test split
+            X_tr, X_te, y_tr, y_te = numpy_train_test_split(
+                X_list[i],
+                y_list[i],
+                test_size=test_size,
+                seed=seed
+            )
+            X_train_list.append(X_tr)
+            X_test_list.append(X_te)
+            y_train_list.append(y_tr)
+            y_test_list.append(y_te)
+
+        # Compute Scores on training data
+        cached_scores = {}
+        cached_time_scores = {}
+
+        print("\nComputing scores for current seed...")
+        for k in k_vector:
+            scores_k, time_scores_k = compute_scores(k, X_train_list, y_train_list)
+            cached_scores[k] = scores_k
+            cached_time_scores[k] = time_scores_k
+
+        # initialize seed results
+        results[seed] = {}
+
+        # calculate mu values
+        cached_mu_values = {m: [] for m in ["LS", "CLS", "RS", "CS"]}
+
+        # Run for each k
+        for k in k_vector:
+            print(f"\n--- Running k = {k} ---")
+
+            # perform reduction pipeline
+            out = apply_row_after_col_reduction_log(
+                k=k,
+                seed=seed,
+                X_train_list=X_train_list,
+                X_test_list=X_test_list,
+                y_train_list=y_train_list,
+                y_test_list=y_test_list,
+                base=base,
+                folder=folder,
+                row_reduction=row_reduction,
+                cached_scores=cached_scores[k],
+                cached_time_scores=cached_time_scores[k],
+                cached_mu_values=cached_mu_values
+            )
+
+        # get errors
+        rmse_test = out["brier_test"]
+        rmse_train = out["brier_train"]
         ce_train = out["ce_train"]
         ce_test = out["ce_test"]
-        mu_values = out["mu"]
 
-        # summary containers
-        brier_summary = {}
-        ce_summary = {}
+        # extract further structural information
+        time_scores = out["time_scores"]
+        time_model = out["time_model"]
 
-        # summarize Brier + CE for each method
-        for method in brier_test.keys():
-
-            # --- Test Brier ---
-            raw_test = brier_test[method]
-            brier_summary[method] = {
-                "raw": raw_test,
-                "mean": float(np.mean(raw_test)),
-                "median": float(np.median(raw_test))
+        # summarize the errors
+        loss_summary = {
+            method: {
+                "raw": rmse_test[method],
+                "mean": float(np.mean(rmse_test[method])),
+                "median": float(np.median(rmse_test[method]))
             }
+            for method in rmse_test.keys()
+        }
 
-            # --- Test CE ---
-            raw_ce_test = ce_test[method]
-            ce_summary[method] = {
-                "raw": raw_ce_test,
-                "mean": float(np.mean(raw_ce_test)),
-                "median": float(np.median(raw_ce_test))
+        # same for sanity check of training errors
+        train_loss_summary = {
+            method: {
+                "raw": rmse_train[method],
+                "mean": float(np.mean(rmse_train[method])),
+                "median": float(np.median(rmse_train[method]))
             }
+            for method in rmse_train.keys()
+        }
 
-            # --- Skip training metrics for Full ---
-            if method == "Full":
-                continue
+        # summarize cross entropy
+        ce_summary = {
+            method: {
+                "raw": ce_test[method],
+                "mean": float(np.mean(ce_test[method])),
+                "median": float(np.median(ce_test[method]))
+            }
+            for method in ce_test.keys()
+        }
 
-            # --- Train Brier ---
-            raw_train = brier_train[method]
-            brier_summary[method]["train_raw"] = raw_train
-            brier_summary[method]["train_mean"] = float(np.mean(raw_train))
-            brier_summary[method]["train_median"] = float(np.median(raw_train))
+        # same for training
+        ce_train_summary = {
+            method: {
+                "raw": ce_train[method],
+                "mean": float(np.mean(ce_train[method])),
+                "median": float(np.median(ce_train[method]))
+            }
+            for method in ce_train.keys()
+        }
 
-            # --- Train CE ---
-            raw_ce_train = ce_train[method]
-            ce_summary[method]["train_raw"] = raw_ce_train
-            ce_summary[method]["train_mean"] = float(np.mean(raw_ce_train))
-            ce_summary[method]["train_median"] = float(np.median(raw_ce_train))
+        # summarize the time for score calculation
+        score_time_summary = {
+            method: {
+                "raw": time_scores[method],
+                "mean": float(np.mean(time_scores[method])),
+                "median": float(np.median(time_scores[method]))
+            }
+            for method in time_scores.keys()
+        }
+
+        # same for modeling time
+        model_time_summary = {
+            method: {
+                "raw": time_model[method],
+                "mean": float(np.mean(time_model[method])),
+                "median": float(np.median(time_model[method]))
+            }
+            for method in time_model.keys()
+        }
 
         # store everything for this seed
-        results[outer_seed] = {
-            "scores": scores,
-            "time_scores": time_scores,
-            "selected_columns": selected_columns,
-            "selected_rows": selected_rows,
-            "brier": brier_summary,
+        results[seed] = {
+            "loss": loss_summary,
+            "train_loss": train_loss_summary,
+            "selected_columns": out["selected_columns"],
+            "selected_rows": out["selected_rows"],
+            "scores": out["scores"],
+            "time_scores": score_time_summary,
+            "time_model": model_time_summary,
             "ce": ce_summary,
-            "mu": mu_values
+            "ce_train": ce_train_summary,
+            "mu": out["mu"]
         }
+
+        # Save seed results
+        save_path = f"{base}/{results_folder}"
+        os.makedirs(save_path, exist_ok=True)
+
+        if save_name is None:
+            seed_file = f"{save_path}/results_seed_{seed}.pkl"
+        else:
+            seed_file = f"{save_path}/{save_name}_seed_{seed}.pkl"
+
+        with open(seed_file, "wb") as f:
+            pickle.dump(results[seed], f)
+
+        print(f"Saved seed {seed} → {seed_file}")
 
     return results
