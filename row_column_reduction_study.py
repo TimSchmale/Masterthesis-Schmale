@@ -494,9 +494,9 @@ def apply_col_after_row_reduction(
         nan_dict = {m: [np.nan] * len(X_train_list) for m in ["LS", "CLS", "RS", "CS"]}
 
         return {
-            "scores": None,
-            "time_scores": None,
-            "time_model": None,
+            "scores": nan_dict,
+            "time_scores": nan_dict,
+            "time_model": nan_dict,
             "selected_columns": None,
             "selected_rows": None,
             "rmse_train": nan_dict,
@@ -709,29 +709,6 @@ def run_sampling_variance_col_after_row(
                 folder=folder,
                 gaussian=gaussian
             )
-
-            if out["scores"] is None:
-                # Soft abort
-                nan_dict = {
-                    method: {
-                        "raw": out["rmse_test"][method],
-                        "mean": float(np.nanmean(out["rmse_test"][method])),
-                        "median": float(np.nanmedian(out["rmse_test"][method]))
-                    }
-                    for method in out["rmse_test"].keys()
-                }
-
-                results[seed][k] = {
-                    "loss": nan_dict,
-                    "train_loss": nan_dict,
-                    "selected_columns": None,
-                    "selected_rows": None,
-                    "scores": None,
-                    "time_scores": None,
-                    "time_model": None,
-                }
-
-                continue
 
             # extract RMSE values
             rmse_test = out["rmse_test"]

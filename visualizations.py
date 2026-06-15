@@ -169,19 +169,38 @@ def plot_facets_all_seeds(results, k_vector, dataset, metric="rmse", aggregate="
     for k in k_vector:
         ok = True
         for seed in results.keys():
-            for method in results[seed][k]["loss"].keys():
-                vals = results[seed][k]["loss"][method]["raw"]
+            if metric == "brier":
+                metric_dict = results[seed][k]["loss"]
+            elif metric == "rmse":
+                metric_dict = results[seed][k]["loss"]
+            elif metric == "rmse_train":
+                metric_dict = results[seed][k]["train_loss"]
+            elif metric == "ce":
+                metric_dict = results[seed][k]["ce"]
+            elif metric == "ce_train":
+                metric_dict = results[seed][k]["ce_train"]
+            elif metric == "time_model":
+                metric_dict = results[seed][k]["time_model"]
+            elif metric == "time_scores":
+                metric_dict = results[seed][k]["time_scores"]
+            else:
+                raise ValueError("Unknown metric for log-reg pipeline")
+            for method, entry in metric_dict.items():
+                vals = entry["raw"]
                 if any(np.isnan(vals)):
                     ok = False
                     break
+
             if not ok:
                 break
+
         if ok:
             valid_k.append(k)
 
     k_vector = valid_k
 
     rows = []
+
 
     for seed in results.keys():
         for k in k_vector:
@@ -194,14 +213,20 @@ def plot_facets_all_seeds(results, k_vector, dataset, metric="rmse", aggregate="
             elif metric == "time_model":
                 metric_dict = results[seed][k]["time_model"]
             elif metric == "brier":
-                metric_dict = results[seed][k]["brier"]
+                metric_dict = results[seed][k]["loss"]
+            elif metric == "ce":
+                metric_dict = results[seed][k]["ce"]
+            elif metric == "ce_train":
+                metric_dict = results[seed][k]["ce_train"]
+            elif metric == "rmse_train":
+                metric_dict = results[seed][k]["train_loss"]
             else:
                 raise ValueError("metric must be 'rmse', 'time_scores', or 'brier'.")
 
             for method, entry in metric_dict.items():
 
                 # extract values
-                if metric in ["rmse", "brier", "time_scores", "time_model"]:
+                if metric in ["rmse", "brier", "time_scores", "time_model", "ce", "ce_train", "rmse_train"]:
                     values = entry["raw"]
 
                 # aggregate
@@ -240,16 +265,19 @@ def plot_facets_all_seeds(results, k_vector, dataset, metric="rmse", aggregate="
     df["k"] = df["k"].astype("category")
 
     # Full model only exists for rmse/brier
-    if metric in ["rmse", "brier"]:
+    if metric in ["rmse", "brier", "ce", "ce_train", "rmse_train"]:
         df_no_full = df[df["Method"] != "Full"]
     else:
         df_no_full = df
 
     metric_name = {
         "rmse": "RMSE",
+        "rmse_train": "RMSE (Train)",
         "time_scores": "Score Computation Time (s)",
         "brier": "Brier Score",
         "time_model": "Modeling Time (s)",
+        "ce": "Cross-Entropy",
+        "ce_train": "Cross-Entropy (Train)",
     }[metric]
 
     # facet by method
@@ -322,6 +350,7 @@ def extract_dimensions(entry):
         return None, None
 
     return sel_cols, sel_rows
+
 def plot_dimension_facets(results, k_vector, ncol=2):
     """
     Faceted visualization of selected column and row counts across k and methods.

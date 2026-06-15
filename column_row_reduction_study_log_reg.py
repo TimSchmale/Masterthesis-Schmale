@@ -391,7 +391,7 @@ def logistic_modeling(C, R, X_train_list, X_test_list, y_train_list, y_test_list
                 brier_test[method].append(brier_score_loss(y_test_list[i], pred_test))
                 ce_test[method].append(log_loss(y_test_list[i], pred_test))
 
-    return brier_train, brier_test, ce_train, ce_test
+    return brier_train, brier_test, ce_train, ce_test, time_model
 
 def compute_full_model(
         X_train_list,
@@ -791,89 +791,89 @@ def run_sampling_variance_row_after_col_log(
                 cached_mu_values=cached_mu_values
             )
 
-        # get errors
-        rmse_test = out["brier_test"]
-        rmse_train = out["brier_train"]
-        ce_train = out["ce_train"]
-        ce_test = out["ce_test"]
+            # get errors
+            rmse_test = out["brier_test"]
+            rmse_train = out["brier_train"]
+            ce_train = out["ce_train"]
+            ce_test = out["ce_test"]
 
-        # extract further structural information
-        time_scores = out["time_scores"]
-        time_model = out["time_model"]
+            # extract further structural information
+            time_scores = out["time_scores"]
+            time_model = out["time_model"]
 
-        # summarize the errors
-        loss_summary = {
-            method: {
-                "raw": rmse_test[method],
-                "mean": float(np.mean(rmse_test[method])),
-                "median": float(np.median(rmse_test[method]))
+            # summarize the errors
+            loss_summary = {
+                method: {
+                    "raw": rmse_test[method],
+                    "mean": float(np.mean(rmse_test[method])),
+                    "median": float(np.median(rmse_test[method]))
+                }
+                for method in rmse_test.keys()
             }
-            for method in rmse_test.keys()
-        }
 
-        # same for sanity check of training errors
-        train_loss_summary = {
-            method: {
-                "raw": rmse_train[method],
-                "mean": float(np.mean(rmse_train[method])),
-                "median": float(np.median(rmse_train[method]))
+            # same for sanity check of training errors
+            train_loss_summary = {
+                method: {
+                    "raw": rmse_train[method],
+                    "mean": float(np.mean(rmse_train[method])),
+                    "median": float(np.median(rmse_train[method]))
+                }
+                for method in rmse_train.keys()
             }
-            for method in rmse_train.keys()
-        }
 
-        # summarize cross entropy
-        ce_summary = {
-            method: {
-                "raw": ce_test[method],
-                "mean": float(np.mean(ce_test[method])),
-                "median": float(np.median(ce_test[method]))
+            # summarize cross entropy
+            ce_summary = {
+                method: {
+                    "raw": ce_test[method],
+                    "mean": float(np.mean(ce_test[method])),
+                    "median": float(np.median(ce_test[method]))
+                }
+                for method in ce_test.keys()
             }
-            for method in ce_test.keys()
-        }
 
-        # same for training
-        ce_train_summary = {
-            method: {
-                "raw": ce_train[method],
-                "mean": float(np.mean(ce_train[method])),
-                "median": float(np.median(ce_train[method]))
+            # same for training
+            ce_train_summary = {
+                method: {
+                    "raw": ce_train[method],
+                    "mean": float(np.mean(ce_train[method])),
+                    "median": float(np.median(ce_train[method]))
+                }
+                for method in ce_train.keys()
             }
-            for method in ce_train.keys()
-        }
 
-        # summarize the time for score calculation
-        score_time_summary = {
-            method: {
-                "raw": time_scores[method],
-                "mean": float(np.mean(time_scores[method])),
-                "median": float(np.median(time_scores[method]))
+            # summarize the time for score calculation
+            score_time_summary = {
+                method: {
+                    "raw": time_scores[method],
+                    "mean": float(np.mean(time_scores[method])),
+                    "median": float(np.median(time_scores[method]))
+                }
+                for method in time_scores.keys()
             }
-            for method in time_scores.keys()
-        }
 
-        # same for modeling time
-        model_time_summary = {
-            method: {
-                "raw": time_model[method],
-                "mean": float(np.mean(time_model[method])),
-                "median": float(np.median(time_model[method]))
+            # same for modeling time
+            model_time_summary = {
+                method: {
+                    "raw": time_model[method],
+                    "mean": float(np.mean(time_model[method])),
+                    "median": float(np.median(time_model[method]))
+                }
+                for method in time_model.keys()
             }
-            for method in time_model.keys()
-        }
 
-        # store everything for this seed
-        results[seed] = {
-            "loss": loss_summary,
-            "train_loss": train_loss_summary,
-            "selected_columns": out["selected_columns"],
-            "selected_rows": out["selected_rows"],
-            "scores": out["scores"],
-            "time_scores": score_time_summary,
-            "time_model": model_time_summary,
-            "ce": ce_summary,
-            "ce_train": ce_train_summary,
-            "mu": out["mu"]
-        }
+            # store everything for this seed
+            results[seed][k] = {
+                "loss": loss_summary,
+                "train_loss": train_loss_summary,
+                "selected_columns": out["selected_columns"],
+                "selected_rows": out["selected_rows"],
+                "scores": out["scores"],
+                "time_scores": score_time_summary,
+                "time_model": model_time_summary,
+                "ce": ce_summary,
+                "ce_train": ce_train_summary,
+                "mu": out["mu"]
+            }
 
         # Save seed results
         save_path = f"{base}/{results_folder}"
