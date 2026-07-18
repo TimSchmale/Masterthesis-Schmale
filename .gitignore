@@ -1,0 +1,32 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.so
+
+# Virtual environments
+.venv/
+env/
+venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Data
+Simulation Data/
+Results/
+plots/
+
+# Large files
+*.pkl
+*.csv
+*.pdf
+*.zip
+*.gz
+*.h5
+*.npy
+*.npz
