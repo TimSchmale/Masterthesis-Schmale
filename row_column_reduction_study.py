@@ -219,12 +219,12 @@ def data_reduction(k, df_train, y_train, gaussian=False):
 
         # compute LS scores
         start = time.perf_counter()
-        scores["LS"].append(get_column_leverage_scores(R, k))
+        scores["LS"].append(get_column_leverage_scores(R, k, rank_reduce=False))
         time_scores["LS"].append(time.perf_counter() - start)
 
         # compute CLS scores
         start = time.perf_counter()
-        scores["CLS"].append(get_cross_leverage_scores(R, y))
+        scores["CLS"].append(get_cross_leverage_scores(R, y, k, rank_reduce=False))
         time_scores["CLS"].append(time.perf_counter() - start)
 
         # compute RS scores

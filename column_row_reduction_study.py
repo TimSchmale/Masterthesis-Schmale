@@ -9,12 +9,77 @@ from scoring_functions import (
     get_row_leverage_scores,
     get_random_scores,
     get_combined_scores,
-    get_cross_leverage_scores
+    get_cross_leverage_scores,
+    get_cross_leverage_scores_svd
 )
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error
 import time
 from sklearn.model_selection import train_test_split
+
+def compute_scores(k, X_list, y_list):
+    """
+    Compute all column-based score vectors once per replication for a fixed rank k.
+
+    This function precomputes the four score types used in the CUR pipeline:
+    - LS  : Column leverage scores (SVD-based)
+    - CLS : Cross-leverage scores (augmented QR-based)
+    - RS  : Random scores (uniform reference baseline)
+    - CS  : Combined LS/CLS scores (weighted mixture)
+
+    Since X_list and y_list do not change across seeds, these scores can be
+    cached and reused for all outer repetitions. This eliminates redundant
+    score computation inside the main sampling-variance loop..
+
+    Parameters
+    ----------
+    k : int
+        Target rank for the CUR approximation. Affects LS and CS scores.
+    X_list : list of DataFrames
+        Full design matrices for all replications (before train/test splitting).
+    y_list : list of DataFrames or Series
+        Full response vectors for all replications.
+
+    Returns
+    -------
+    tuple
+        scores : dict
+            Dictionary with keys {"LS", "CLS", "RS", "CS"}.
+            Each entry is a list of score vectors, one per replication.
+        time_scores : dict
+            Dictionary with the same keys, containing the computation
+            time (in seconds) for each score vector.
+    """
+    print(f"computing scores for k={k}...")
+    # Initialize containers for score vectors and timing information
+    scores = {"LS": [], "CLS": [], "RS": [], "CS": []}
+    time_scores = {"LS": [], "CLS": [], "RS": [], "CS": []}
+
+    # Loop over all replications (X1..X_10)
+    for i in range(len(X_list)):
+        X = X_list[i]
+        y = y_list[i]
+
+        # LS: Column leverage scores
+        start = time.perf_counter()
+        scores["LS"].append(get_column_leverage_scores(X, k, rank_reduce = True))
+        time_scores["LS"].append(time.perf_counter() - start)
+
+        # CLS: Cross-leverage scores
+        start = time.perf_counter()
+        scores["CLS"].append(get_cross_leverage_scores_svd(X, y, k, rank_reduce = True))
+        time_scores["CLS"].append(time.perf_counter() - start)
+
+        # RS: Random scores
+        start = time.perf_counter()
+        scores["RS"].append(get_random_scores(X))
+        time_scores["RS"].append(time.perf_counter() - start)
+
+        # CS: Combined LS/CLS scores
+        scores["CS"].append(get_combined_scores(X, y, k, p_leverage=0.2, ls=scores["LS"][i], cls=np.abs(scores["CLS"][i])))
+        time_scores["CS"].append(time_scores["CLS"][i] + time_scores["LS"][i])
+
+    return scores, time_scores
 
 def column_reduction(X, scores, k):
     """
@@ -61,7 +126,6 @@ def column_reduction(X, scores, k):
     # ensure at least k columns are selected
     if len(sampled) < k:
         missing = k - len(sampled)
-#        print(f"need to fill {missing} columns")
         candidates = np.argsort(scaled_probs)[- (missing + len(sampled)):]
         candidates = [idx for idx in candidates if idx not in sampled]
         sampled = np.concatenate([sampled, candidates[:missing]])
@@ -109,8 +173,8 @@ def row_reduction(C, y, k):
 
     n, c = C.shape
 
-    # compute row leverage scores
-    scores = get_row_leverage_scores(C, k)
+    # compute row leverage scores - not on rank reduce mode as rank reduction is done via col reduction
+    scores = get_row_leverage_scores(C, k, rank_reduce = False)
     scores = np.asarray(scores, dtype=float).reshape(-1)
 
     # compute sampling probabilities
@@ -149,70 +213,6 @@ def row_reduction(C, y, k):
         "y": y_reduced,
         "selected_rows": sampled.tolist()
     }
-
-def compute_scores(k, X_list, y_list):
-    """
-    Compute all column-based score vectors once per replication for a fixed rank k.
-
-    This function precomputes the four score types used in the CUR pipeline:
-    - LS  : Column leverage scores (SVD-based)
-    - CLS : Cross-leverage scores (augmented QR-based)
-    - RS  : Random scores (uniform reference baseline)
-    - CS  : Combined LS/CLS scores (weighted mixture)
-
-    Since X_list and y_list do not change across seeds, these scores can be
-    cached and reused for all outer repetitions. This eliminates redundant
-    score computation inside the main sampling-variance loop..
-
-    Parameters
-    ----------
-    k : int
-        Target rank for the CUR approximation. Affects LS and CS scores.
-    X_list : list of DataFrames
-        Full design matrices for all replications (before train/test splitting).
-    y_list : list of DataFrames or Series
-        Full response vectors for all replications.
-
-    Returns
-    -------
-    tuple
-        scores : dict
-            Dictionary with keys {"LS", "CLS", "RS", "CS"}.
-            Each entry is a list of score vectors, one per replication.
-        time_scores : dict
-            Dictionary with the same keys, containing the computation
-            time (in seconds) for each score vector.
-    """
-    print(f"computing scores for k={k}...")
-    # Initialize containers for score vectors and timing information
-    scores = {"LS": [], "CLS": [], "RS": [], "CS": []}
-    time_scores = {"LS": [], "CLS": [], "RS": [], "CS": []}
-
-    # Loop over all replications (X1..X_10)
-    for i in range(len(X_list)):
-        X = X_list[i]
-        y = y_list[i]
-
-        # LS: Column leverage scores
-        start = time.perf_counter()
-        scores["LS"].append(get_column_leverage_scores(X, k))
-        time_scores["LS"].append(time.perf_counter() - start)
-
-        # CLS: Cross-leverage scores
-        start = time.perf_counter()
-        scores["CLS"].append(get_cross_leverage_scores(X, y))
-        time_scores["CLS"].append(time.perf_counter() - start)
-
-        # RS: Random scores
-        start = time.perf_counter()
-        scores["RS"].append(get_random_scores(X))
-        time_scores["RS"].append(time.perf_counter() - start)
-
-        # CS: Combined LS/CLS scores
-        scores["CS"].append(get_combined_scores(X, y, k, p_leverage=0.2, ls=scores["LS"][i], cls=np.abs(scores["CLS"][i])))
-        time_scores["CS"].append(time_scores["CLS"][i] + time_scores["LS"][i])
-
-    return scores, time_scores
 
 def data_reduction(k, df_train, y_train, row_reduce=True,
                    cached_scores=None, cached_time_scores=None):

@@ -2,8 +2,9 @@ import pandas as pd
 import numpy as np
 from IPython.display import display
 from plotnine import (
-    ggplot, aes, geom_boxplot, geom_line, geom_point, facet_wrap,
-    labs, theme_minimal, theme, scale_x_discrete, element_text, scale_y_continuous, geom_histogram, theme_bw, scale_y_log10
+    ggplot, aes, geom_boxplot, geom_line, geom_point, facet_wrap, lims,
+    labs, theme_minimal, theme, scale_x_discrete, element_text, scale_y_continuous, geom_histogram, theme_bw,
+    scale_y_log10, geom_abline
 )
 import os
 def visualize_distributions(scores):
@@ -280,18 +281,21 @@ def plot_facets_all_seeds(results, k_vector, dataset, metric="rmse", aggregate="
         "ce_train": "Cross-Entropy (Train)",
     }[metric]
 
+
     # facet by method
     p_method = (
         ggplot(df_no_full, aes(x="k", y="Loss", fill="Method"))
+        + geom_abline(slope=0, intercept=np.median(df[df["Method"] == "Full"]["Loss"]), color="black")
         + geom_boxplot()
         + facet_wrap("~ Method", scales="fixed")
         + theme_bw()
-        + theme(figure_size=(18, 20))
+        + theme(figure_size=(25, 18))
         + labs(
-            title=f"{metric_name} per Method across k (aggregate={aggregate})",
+            title=f"{metric_name} per Method across k",
             x="k",
             y=metric_name
         )
+        + lims(y=(np.median(df[df["Method"] == "Full"]["Loss"]) - 0.1,np.max(df_no_full["Loss"])))
     )
 
     # facet by k
@@ -300,13 +304,18 @@ def plot_facets_all_seeds(results, k_vector, dataset, metric="rmse", aggregate="
         + geom_boxplot()
         + facet_wrap("~ k", scales="fixed")
         + theme_bw()
-        + theme(figure_size=(18, 20))
+        + theme(figure_size=(25, 10))
         + labs(
             title=f"{metric_name} per k across Methods (aggregate={aggregate})",
             x="Method",
             y=metric_name
         )
     )
+
+    #  Add log-scale for CE metrics
+    if metric in ["ce", "ce_train"]:
+        p_method = p_method + scale_y_log10()
+        p_k = p_k + scale_y_log10()
 
     if save_path is not None:
         os.makedirs(save_path, exist_ok=True)
@@ -316,6 +325,159 @@ def plot_facets_all_seeds(results, k_vector, dataset, metric="rmse", aggregate="
 
     display(p_method)
     display(p_k)
+
+def plot_all_boxplots(
+    results, k_vector, dataset, metric="rmse", aggregate="raw", save_path=None
+):
+    rows = []
+
+    # 1. k filtern: nur k verwenden, die in allen Seeds existieren
+    valid_k = []
+    for k in k_vector:
+        ok = True
+        for seed in results.keys():
+            if k not in results[seed]:
+                ok = False
+                break
+        if ok:
+            valid_k.append(k)
+
+    # 2. Werte einsammeln
+    for seed in results.keys():
+        for k in valid_k:
+
+            # Metric dictionary auswählen
+            if metric == "rmse":
+                metric_dict = results[seed][k]["loss"]
+            elif metric == "rmse_train":
+                metric_dict = results[seed][k]["train_loss"]
+            elif metric == "ce":
+                metric_dict = results[seed][k]["ce"]
+            elif metric == "ce_train":
+                metric_dict = results[seed][k]["ce_train"]
+            elif metric == "time_scores":
+                metric_dict = results[seed][k]["time_scores"]
+            elif metric == "time_model":
+                metric_dict = results[seed][k]["time_model"]
+            else:
+                raise ValueError("Unknown metric.")
+
+            for method, entry in metric_dict.items():
+                values = np.asarray(entry["raw"])
+
+                # komplett leere / NaN-Kombis überspringen
+                if np.all(np.isnan(values)):
+                    continue
+
+                if aggregate == "raw":
+                    for rep_idx, val in enumerate(values):
+                        if np.isnan(val):
+                            continue
+                        rows.append({
+                            "Seed": seed,
+                            "k": k,
+                            "Method": method,
+                            "Replication": rep_idx + 1,
+                            "Loss": val
+                        })
+
+                elif aggregate == "mean":
+                    rows.append({
+                        "Seed": seed,
+                        "k": k,
+                        "Method": method,
+                        "Replication": None,
+                        "Loss": float(np.nanmean(values))
+                    })
+
+                elif aggregate == "median":
+                    rows.append({
+                        "Seed": seed,
+                        "k": k,
+                        "Method": method,
+                        "Replication": None,
+                        "Loss": float(np.nanmedian(values))
+                    })
+
+                else:
+                    raise ValueError("aggregate must be 'raw', 'mean', or 'median'.")
+
+    df = pd.DataFrame(rows)
+
+    # 3. numerische Sortierung
+    df["k"] = df["k"].astype(int)
+
+    # Full extrahieren (einmalig)
+    df_full = df[df["Method"] == "Full"]
+    df_no_full = df[df["Method"] != "Full"]
+
+    # Full bekommt eigenes Label
+    if len(df_full) > 0:
+        df_full = df_full.copy()
+        df_full["x_label"] = "Full"
+
+    # reguläre Methoden sortieren: Methode → k
+    combos = df_no_full[["Method", "k"]].drop_duplicates()
+    method_sorted = sorted(combos["Method"].unique())
+    k_sorted = sorted(combos["k"].unique())
+
+    df_no_full["x_label"] = df_no_full["Method"] + " | " + df_no_full["k"].astype(str)
+
+    # Kategorien nur für existierende Kombis
+    x_order = []
+
+    # zuerst Full
+    if len(df_full) > 0:
+        x_order.append("Full")
+
+    # dann Methoden → k
+    for m in method_sorted:
+        for k in k_sorted:
+            if ((combos["Method"] == m) & (combos["k"] == k)).any():
+                x_order.append(f"{m} | {k}")
+
+    # zusammenführen
+    df_plot = pd.concat([df_full, df_no_full], ignore_index=True)
+
+    df_plot["x_label"] = pd.Categorical(df_plot["x_label"], categories=x_order, ordered=True)
+    df_plot = df_plot.sort_values("x_label")
+
+    # 4. Metric-Namen
+    metric_name = {
+        "rmse": "RMSE",
+        "rmse_train": "RMSE (Train)",
+        "ce": "Cross-Entropy",
+        "ce_train": "Cross-Entropy (Train)",
+        "time_scores": "Score Computation Time (s)",
+        "time_model": "Modeling Time (s)"
+    }[metric]
+
+    # 5. Plot
+    p = (
+        ggplot(df_plot, aes(x="x_label", y="Loss", fill="Method"))
+        + geom_boxplot(width=0.2)
+        + theme_bw()
+        + theme(
+            figure_size=(25, 12),
+            axis_text_x=element_text(rotation=90, ha="center", size=7)
+        )
+        + labs(
+            x="Method | k",
+            y=metric_name
+        )
+    )
+
+    # 6. Speichern
+    if save_path is not None:
+        os.makedirs(save_path, exist_ok=True)
+        file_path = os.path.join(save_path, f"all_45_boxplots_{metric}_{dataset}.pdf")
+        p.save(file_path, limitsize=False)
+        print(f"Saved: {file_path}")
+
+    display(p)
+
+
+
 
 def extract_dimensions(entry):
     """

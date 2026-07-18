@@ -347,7 +347,7 @@ def lasso_modeling(R_reduced, df_train, df_test, y_train, y_test, y_reduced, k):
         t0 = time.time()
 
         # compute CLS scores
-        cls_scores = np.abs(get_cross_leverage_scores(X_full, y_full))
+        cls_scores = np.abs(get_cross_leverage_scores(X_full, y_full, k, rank_reduce=False))
 
         # apply EXPECTED(c) column sampling
         col_red = column_reduction(X_full, cls_scores, k)

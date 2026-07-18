@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import os
 from IPython.display import display
 from plotnine import ggplot, aes, geom_boxplot, theme_minimal, labs, facet_wrap
 
@@ -363,9 +364,9 @@ def collect_screening_results(results, k_vector, base, folder, reps):
     df["k"] = df["k"].astype("category")
     return df
 
-def plot_screening_facets(df, metric="HitPercentage", aggregate="raw"):
+def plot_screening_facets(df, dataset, metric="HitPercentage", aggregate="raw", save_path=None):
     metric_label = {
-        "HitPercentage": "Hit Percentage (%)",
+        "HitPercentage": "True Positive Rate (%)",
         "BetaShare": "Beta Share (%)"
     }[metric]
 
@@ -406,3 +407,9 @@ def plot_screening_facets(df, metric="HitPercentage", aggregate="raw"):
 
     display(p_method)
     display(p_k)
+
+    if save_path is not None:
+        os.makedirs(save_path, exist_ok=True)
+        p_method.save(os.path.join(save_path, f"screening_method_{metric}_{dataset}_{aggregate}.pdf"))
+        p_k.save(os.path.join(save_path, f"screening_k_{metric}_{dataset}_{aggregate}.pdf"))
+        print("Plots saved.")

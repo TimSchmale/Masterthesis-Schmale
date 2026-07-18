@@ -156,8 +156,8 @@ def row_reduction(C, y, mu, k):
     r = max(1, min(r, n))
 
     # compute score components
-    l1 = get_log_reg_leverage_scores(C)
-    l2 = get_row_leverage_scores(C, k)
+    l1 = get_log_reg_leverage_scores(C, k, rank_reduce=False)
+    l2 = get_row_leverage_scores(C, k, rank_reduce=False)
     uniform = np.ones(n) / n
 
     # combined score
@@ -221,12 +221,12 @@ def compute_scores(k, X_list, y_list):
 
         # LS: Column leverage scores
         start = time.perf_counter()
-        scores["LS"].append(get_column_leverage_scores(X, k))
+        scores["LS"].append(get_column_leverage_scores(X, k, rank_reduce=True))
         time_scores["LS"].append(time.perf_counter() - start)
 
         # CLS: Cross-leverage scores
         start = time.perf_counter()
-        scores["CLS"].append(get_cross_leverage_scores(X, y))
+        scores["CLS"].append(get_cross_leverage_scores(X, y, k, rank_reduce=True))
         time_scores["CLS"].append(time.perf_counter() - start)
 
         # RS: Random scores

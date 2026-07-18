@@ -23,7 +23,7 @@ def get_random_scores(X):
     return np.random.uniform(0.0, 1.0, size=n_cols)
 
 
-def get_column_leverage_scores(X, k):
+def get_column_leverage_scores(X, k, rank_reduce = True):
     """
     Compute column leverage scores using the top-k right singular vectors.
 
@@ -50,11 +50,16 @@ def get_column_leverage_scores(X, k):
         raise ValueError("k must be <= min(n,p)")
 
     U, S, Vh = np.linalg.svd(X, full_matrices=False)
-    V = Vh.T[:, :k]
+
+    # only if rank reduction is needed or not
+    if rank_reduce:
+        V = Vh.T[:, :k]
+    else:
+        V = Vh.T
 
     return np.sum(V * V, axis=1)
 
-def get_row_leverage_scores(X, k):
+def get_row_leverage_scores(X, k, rank_reduce = True):
     """
     Compute row leverage scores using the top-k left singular vectors.
 
@@ -81,10 +86,15 @@ def get_row_leverage_scores(X, k):
         raise ValueError("k must be <= min(n,p)")
 
     U, S, Vh = np.linalg.svd(X, full_matrices=False)
-    return np.sum(U[:, :k] ** 2, axis=1)
+
+    # only if rank reduction is needed
+    if rank_reduce:
+        U = U[:, :k]
+
+    return np.sum(U ** 2, axis=1)
 
 
-def get_log_reg_leverage_scores(X, p=1):
+def get_log_reg_leverage_scores(X, k, p = 1, rank_reduce = True):
     """
     Compute L_p leverage-like scores using the QR decomposition.
 
@@ -109,10 +119,13 @@ def get_log_reg_leverage_scores(X, p=1):
         raise ValueError("X must be 2D!")
 
     Q, _ = np.linalg.qr(X, mode="reduced")
+
+    if rank_reduce:
+        Q = Q[:, :k]
     return np.linalg.norm(Q, ord=p, axis=1) ** p
 
 
-def get_cross_leverage_scores(X, y):
+def get_cross_leverage_scores(X, y, k, rank_reduce = True):
     """
     Compute column cross-leverage scores between X and the response y.
 
@@ -141,7 +154,68 @@ def get_cross_leverage_scores(X, y):
         X_tilde = X_tilde.T
 
     Q, R = np.linalg.qr(X_tilde, mode="reduced")
+
+    if rank_reduce:
+        Q = Q[:, :k]
+
     return Q[:-1, :] @ Q[-1, :]
+
+
+import numpy as np
+
+
+def get_cross_leverage_scores_svd(X, y, k=None, rank_reduce=True):
+    """
+    SVD-basierte Cross-Leverage Scores nach Teschke.
+
+    Die augmentierte Matrix [X | y] wird gebildet und per SVD zerlegt:
+        X_tilde = U S V^T.
+
+    Der Cross-Leverage Score für Spalte j ist das innere Produkt zwischen
+    der j-ten Zeile von U und der letzten Zeile von U (die zu y gehört).
+
+    Parameters
+    ----------
+    X : array-like, shape (n, p)
+        Design matrix.
+    y : array-like, shape (n,)
+        Response vector.
+    k : int, optional
+        Rank for reduction (Top-k left singular vectors).
+    rank_reduce : bool
+        If True, use only the first k columns of U.
+
+    Returns
+    -------
+    ndarray
+        Vector of length p containing cross-leverage scores.
+    """
+
+    # y als Spalte
+    y = y.reshape(-1, 1)
+
+    # augmentierte Matrix: [X | y]
+    X_tilde = np.concatenate([X, y], axis=1)
+
+    # falls n < p+1 → transponieren (wie in deiner QR-Version)
+    if X_tilde.shape[0] < X_tilde.shape[1]:
+        X_tilde = X_tilde.T
+
+    # SVD der erweiterten Matrix
+    U, S, Vt = np.linalg.svd(X_tilde, full_matrices=False)
+
+    # rank reduction
+    if rank_reduce:
+        if k is None:
+            raise ValueError("k must be provided when rank_reduce=True")
+        U = U[:, :k]
+
+    # letzte Zeile ist die y-Zeile
+    u_tilde = U[-1, :]
+
+    # Cross-Leverage Scores: inneres Produkt jeder Zeile mit der y-Zeile
+    # aber nur die ersten p Zeilen (die zu X gehören)
+    return U[:-1, :] @ u_tilde
 
 
 def get_combined_scores(X, y, k, p_leverage, ls = None, cls = None):
