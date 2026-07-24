@@ -256,12 +256,12 @@ def run_ols_experiment(
                     all_sketch_scores.append(s)
                     all_sketch_timings.append(t)
 
-                # Step 3: Column reduction + modeling per method
-                for method in ("LS", "CLS", "RS", "CS"):
-                    metrics = {"rmse_test": [], "rmse_train": [],
-                               "time_model": [], "time_reduction": [],
-                               "time_scores": [], "selected_columns": []}
+                # Step 3: Column reduction (all methods) + abort check
+                reductions_rf = {}
+                abort_reps_rf = set()
 
+                for method in ("LS", "CLS", "RS", "CS"):
+                    reductions_rf[method] = {}
                     for i in range(reps):
                         scores_i = all_sketch_scores[i][method]
 
@@ -272,10 +272,32 @@ def run_ols_experiment(
                         sel_cols = col_res["selected_columns"]
                         time_red = time.perf_counter() - t0
 
-                        # Soft abort: underdetermined system
+                        reductions_rf[method][i] = {
+                            "X_red": X_red, "y_red": y_red,
+                            "sel_cols": sel_cols, "time_red": time_red
+                        }
+
                         if X_red.shape[1] > X_red.shape[0]:
-                            print(f"  [WARN] k={k}, method={method}, rep={i}: "
-                                  f"{X_red.shape[1]} cols > {X_red.shape[0]} rows. Skipping.")
+                            abort_reps_rf.add(i)
+
+                if abort_reps_rf:
+                    print(f"  [INFO] k={k}: Reps {sorted(abort_reps_rf)} aborted "
+                          f"(underdetermined for >=1 method). Skipping ALL methods.")
+
+                # Step 4: Modeling (skip abort_reps for ALL methods)
+                for method in ("LS", "CLS", "RS", "CS"):
+                    metrics = {"rmse_test": [], "rmse_train": [],
+                               "time_model": [], "time_reduction": [],
+                               "time_scores": [], "selected_columns": []}
+
+                    for i in range(reps):
+                        red = reductions_rf[method][i]
+                        X_red = red["X_red"]
+                        y_red = red["y_red"]
+                        sel_cols = red["sel_cols"]
+                        time_red = red["time_red"]
+
+                        if i in abort_reps_rf:
                             metrics["rmse_test"].append(np.nan)
                             metrics["rmse_train"].append(np.nan)
                             metrics["time_model"].append(np.nan)
@@ -482,11 +504,12 @@ def run_logistic_experiment(
         for k in k_vector:
             method_results = {}
 
-            for method in ("LS", "CLS", "RS", "CS"):
-                metrics = {"brier_test": [], "ce_test": [],
-                           "time_model": [], "time_reduction": [],
-                           "time_scores": [], "selected_columns": []}
+            # Phase 1: Compute all reductions and identify abort reps
+            reductions_log = {}
+            abort_reps_log = set()
 
+            for method in ("LS", "CLS", "RS", "CS"):
+                reductions_log[method] = {}
                 for i in range(reps):
                     scores_i = cached_scores[k][method][i]
 
@@ -502,10 +525,32 @@ def run_logistic_experiment(
                     y_red = row_res["y"]
                     time_red = time.perf_counter() - t0
 
-                    # --- Soft abort: underdetermined system check ---
+                    reductions_log[method][i] = {
+                        "X_red": X_red, "y_red": y_red,
+                        "sel_cols": sel_cols, "time_red": time_red
+                    }
+
                     if X_red.shape[1] > X_red.shape[0]:
-                        print(f"  [WARN] k={k}, method={method}, rep={i}: "
-                              f"{X_red.shape[1]} cols > {X_red.shape[0]} rows. Skipping.")
+                        abort_reps_log.add(i)
+
+            if abort_reps_log:
+                print(f"  [INFO] k={k}: Reps {sorted(abort_reps_log)} aborted "
+                      f"(underdetermined for >=1 method). Skipping ALL methods.")
+
+            # Phase 2: Modeling (skip abort_reps for ALL methods)
+            for method in ("LS", "CLS", "RS", "CS"):
+                metrics = {"brier_test": [], "ce_test": [],
+                           "time_model": [], "time_reduction": [],
+                           "time_scores": [], "selected_columns": []}
+
+                for i in range(reps):
+                    red = reductions_log[method][i]
+                    X_red = red["X_red"]
+                    y_red = red["y_red"]
+                    sel_cols = red["sel_cols"]
+                    time_red = red["time_red"]
+
+                    if i in abort_reps_log:
                         metrics["brier_test"].append(np.nan)
                         metrics["ce_test"].append(np.nan)
                         metrics["time_model"].append(np.nan)
