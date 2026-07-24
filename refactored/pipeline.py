@@ -627,12 +627,18 @@ def _run_full_logistic(X_train_list, X_test_list, y_train_list, y_test_list,
             f"{base}/{data_folder}/beta{i + 1}.csv"
         ).to_numpy().ravel()
         support = np.where(beta != 0)[0]
+
         t0 = time.perf_counter()
-        result = fit_logistic(X_train, y_train, X_test, y_test)
+        result = fit_logistic(
+            X_train_list[i][:, support], y_train_list[i],
+            X_test_list[i], y_test_list[i],
+            selected_columns=support
+        )
         metrics["brier_test"].append(result["brier_test"])
         metrics["ce_test"].append(result["ce_test"])
         metrics["time_model"].append(time.perf_counter() - t0)
         metrics["time_reduction"].append(0.0)
+        metrics["time_scores"].append(0.0)
 
     return metrics
 
@@ -849,17 +855,17 @@ def run_lasso_experiment(
     return all_results
 
 
-def _run_full_lasso(X_list, y_list, reps, test_size, seed, k):
-    """Baseline: Lasso (binary search) on full (unreduced) data."""
+def _run_full_lasso(X_train_list, X_test_list, y_train_list, y_test_list,
+                    base, data_folder, reps, k):
+    """Baseline: Lasso (binary search) on full (unreduced) training data."""
     metrics = _init_lasso_metrics()
 
     for i in range(reps):
-        X_train, X_test, y_train, y_test = train_test_split(
-            X_list[i], y_list[i],
-            test_size=test_size, random_state=seed
+        result = fit_lasso(
+            X_train_list[i], y_train_list[i],
+            X_test_list[i], y_test_list[i],
+            k=k, mode="binary_search"
         )
-        result = fit_lasso(X_train, y_train, X_test, y_test,
-                           k=k, mode="binary_search")
         metrics["rmse_test"].append(result["rmse_test"])
         metrics["rmse_train"].append(result["rmse_train"])
         metrics["n_features"].append(result["n_features"])

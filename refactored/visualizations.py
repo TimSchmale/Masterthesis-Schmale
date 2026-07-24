@@ -91,7 +91,7 @@ def _save_plot(p, save_path, filename):
 def plot_loss_boxplots(
     results, k_vector, metric="rmse_test",
     pipeline="col_row", dataset="p1000",
-    aggregate="raw", save_path=None
+    aggregate="median", save_path=None
 ):
     """Boxplots of loss metrics across methods and k values.
 

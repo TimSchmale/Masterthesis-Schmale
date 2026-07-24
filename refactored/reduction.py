@@ -295,9 +295,8 @@ def row_reduction_coreset(C, y, mu, k):
     scores = mu * l1 + l2 + mu * d * uniform
     probs = scores / scores.sum()
 
-    # Weighted sampling without replacement
-    rng = np.random.default_rng()
-    sampled = rng.choice(n, size=r, replace=False, p=probs)
+    # Weighted sampling without replacement (uses global np.random state for reproducibility)
+    sampled = np.random.choice(n, size=r, replace=False, p=probs)
 
     return {
         "R": C[sampled, :],
