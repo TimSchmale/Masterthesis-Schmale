@@ -323,13 +323,15 @@ def run_ols_experiment(
 
             else:
                 # =============================================================
-                # Column-First / Column-Only: standard loop
+                # Column-First / Column-Only: two-phase (reduce, then model)
                 # =============================================================
-                for method in ("LS", "CLS", "RS", "CS"):
-                    metrics = {"rmse_test": [], "rmse_train": [],
-                               "time_model": [], "time_reduction": [],
-                               "time_scores": [], "selected_columns": []}
 
+                # Phase 1: Compute all reductions and identify abort reps
+                reductions_cf = {}
+                abort_reps_cf = set()
+
+                for method in ("LS", "CLS", "RS", "CS"):
+                    reductions_cf[method] = {}
                     for i in range(reps):
                         scores_i = cached_scores[k][method][i]
 
@@ -351,10 +353,32 @@ def run_ols_experiment(
 
                         time_red = time.perf_counter() - t0
 
-                        # Soft abort: underdetermined system
+                        reductions_cf[method][i] = {
+                            "X_red": X_red, "y_red": y_red,
+                            "sel_cols": sel_cols, "time_red": time_red
+                        }
+
                         if X_red.shape[1] > X_red.shape[0]:
-                            print(f"  [WARN] k={k}, method={method}, rep={i}: "
-                                  f"{X_red.shape[1]} cols > {X_red.shape[0]} rows. Skipping.")
+                            abort_reps_cf.add(i)
+
+                if abort_reps_cf:
+                    print(f"  [INFO] k={k}: Reps {sorted(abort_reps_cf)} aborted "
+                          f"(underdetermined for >=1 method). Skipping ALL methods.")
+
+                # Phase 2: Modeling (skip abort_reps for ALL methods)
+                for method in ("LS", "CLS", "RS", "CS"):
+                    metrics = {"rmse_test": [], "rmse_train": [],
+                               "time_model": [], "time_reduction": [],
+                               "time_scores": [], "selected_columns": []}
+
+                    for i in range(reps):
+                        red = reductions_cf[method][i]
+                        X_red = red["X_red"]
+                        y_red = red["y_red"]
+                        sel_cols = red["sel_cols"]
+                        time_red = red["time_red"]
+
+                        if i in abort_reps_cf:
                             metrics["rmse_test"].append(np.nan)
                             metrics["rmse_train"].append(np.nan)
                             metrics["time_model"].append(np.nan)
