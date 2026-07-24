@@ -1,333 +1,65 @@
-import pandas as pd
-import numpy as np
 from IPython.display import display
 from plotnine import (
-    ggplot, aes, geom_boxplot, geom_line, geom_point, facet_wrap, lims,
-    labs, theme_minimal, theme, scale_x_discrete, element_text, scale_y_continuous, geom_histogram, theme_bw,
-    scale_y_log10, geom_abline
+    ggplot, aes,
+    geom_histogram, geom_point, geom_smooth, geom_boxplot,
+    facet_wrap, theme_minimal, theme_bw, theme, element_text,
+    labs
 )
+import pandas as pd
+import numpy as np
+
 import os
-def visualize_distributions(scores):
+
+def visualize_score_facets_single(scores_single, save_path=None,
+                                  pipeline=None, metric=None, dataset=None):
     """
-    Visualize score distributions across replications for each method.
+    Plot score distributions for a single replication and optionally save as PDF.
 
-    For each method, the score arrays are converted into long format and
-    displayed as faceted histograms, one facet per replication.
+    scores_single: dict with keys CLS, CS, LS, RS
+                   each containing ONE score vector (not a list).
+    save_path: directory where PDF should be saved
+    pipeline, metric, dataset: used for naming the output file
     """
-
-    # iterate over methods and their score lists
-    for method, score_list in scores.items():
-
-        # collect long-format rows for this method
-        rows = []
-        for rep_idx, arr in enumerate(score_list, start=1):
-            arr = np.asarray(arr).reshape(-1)
-            for v in arr:
-                rows.append({
-                    "value": v,
-                    "Replication": rep_idx
-                })
-
-        # build DataFrame for plotting
-        df_method = pd.DataFrame(rows)
-
-        # create histogram faceted by replication
-        p = (
-            ggplot(df_method, aes(x="value"))
-            + geom_histogram(bins=80, fill="#4C72B0", alpha=0.7)
-            + facet_wrap("~Replication", ncol=5)
-            + theme_bw()
-            + labs(
-                title=f"{method} Score Distribution by Replication",
-                x="Score",
-                y="Count"
-            )
-        )
-
-        # display plot
-        display(p)
-
-def plot_facets_all(results_dict, k_vector, dataset, metric="brier", save_path=None):
-    """
-    Create facet-based boxplots for loss metrics across k and methods.
-
-    The function aggregates loss values across all k, reshapes the data
-    into long format, and produces two facet plots:
-    (1) faceted by method with k on the x-axis,
-    (2) faceted by k with method on the x-axis.
-    """
-
-    # collect loss data across all k values
-    rows = []
-    for k in k_vector:
-
-        # select appropriate metric dictionary
-        if metric == "brier":
-            loss_dict = results_dict[k]["brierloss"]
-        elif metric == "rmse":
-            loss_dict = results_dict[k]["rmse"]
-        elif metric == "time_scores":
-            loss_dict = results_dict[k]["time_scores"]
-        elif metric == "time_model":
-            loss_dict = results_dict[k]["time_model"]
-        else:
-            raise ValueError("metric must be 'brier', 'rmse', 'time_model' or 'time_scores'")
-
-        # determine number of replications
-        n_reps = len(next(iter(loss_dict.values())))
-
-        # build DataFrame for this k
-        df = pd.DataFrame(loss_dict)
-        df["Replication"] = np.arange(1, n_reps + 1)
-        df["k"] = k
-        rows.append(df)
-
-    # concatenate all k-level DataFrames
-    loss_all = pd.concat(rows, ignore_index=True)
-
-    # reshape to long format
-    loss_long = loss_all.melt(
-        id_vars=["Replication", "k"],
-        var_name="Method",
-        value_name="Loss"
-    )
-
-    # convert k to categorical for discrete x-axis
-    loss_long["k"] = loss_long["k"].astype("category")
-
-    # map metric to readable name
-    metric_name = {
-        "brier": "Brier Score",
-        "rmse": "RMSE",
-        "time_scores": "Score Calculation Time",
-        "time_model": "Modeling Time"
-    }[metric]
-
-    # remove Full model for method-facet plot
-    loss_long_no_full = loss_long[loss_long["Method"] != "Full"]
-
-    # create facet plot by method
-    p_method = (
-        ggplot(loss_long_no_full, aes(x="k", y="Loss", fill="Method"))
-        + geom_boxplot()
-        + facet_wrap("~ Method", scales="fixed", ncol=2)
-        + theme_bw()
-        + theme(figure_size=(18, 20))
-        + labs(
-            title=f"{metric_name} per Method across k",
-            x="k",
-            y=metric_name
-        )
-    )
-
-    # create facet plot by k
-    p_k = (
-        ggplot(loss_long, aes(x="Method", y="Loss", fill="Method"))
-        + geom_boxplot()
-        + facet_wrap("~ k", scales="fixed", ncol=3)
-        + theme_bw()
-        + theme(figure_size=(18, 20))
-        + labs(
-            title=f"{metric_name} per k across Methods",
-            x="Method",
-            y=metric_name
-        )
-    )
-
-    # optionally save plots as PDF
-    if save_path is not None:
-        os.makedirs(save_path, exist_ok=True)
-
-        file_method = os.path.join(save_path, f"facet_method_{metric}_{dataset}.pdf")
-        file_k = os.path.join(save_path, f"facet_k_{metric}_{dataset}.pdf")
-
-        p_method.save(file_method)
-        p_k.save(file_k)
-
-        print(f"Saved:\n - {file_method}\n - {file_k}")
-
-    # display both plots
-    display(p_method)
-    display(p_k)
-
-def plot_facets_all_seeds(results, k_vector, dataset, metric="rmse", aggregate="raw", save_path=None):
-    """
-    Facet-based boxplots aggregated across seeds, replications, methods, and k.
-
-    Supported metrics:
-        - "rmse"  -> results[seed][k]["loss"][method]["raw"]
-        - "time"  -> results[seed][k]["time_scores"][method]
-        - "brier" -> results[seed][k]["brier"][method]["raw"] (if present)
-
-    aggregate:
-        - "raw"   -> plot all replication values
-        - "mean"  -> plot mean per (seed, k, method)
-        - "median"-> plot median per (seed, k, method)
-    """
-
-    # filter k_vector to only those present in results
-    valid_k = []
-    for k in k_vector:
-        ok = True
-        for seed in results.keys():
-            if metric == "brier":
-                metric_dict = results[seed][k]["loss"]
-            elif metric == "rmse":
-                metric_dict = results[seed][k]["loss"]
-            elif metric == "rmse_train":
-                metric_dict = results[seed][k]["train_loss"]
-            elif metric == "ce":
-                metric_dict = results[seed][k]["ce"]
-            elif metric == "ce_train":
-                metric_dict = results[seed][k]["ce_train"]
-            elif metric == "time_model":
-                metric_dict = results[seed][k]["time_model"]
-            elif metric == "time_scores":
-                metric_dict = results[seed][k]["time_scores"]
-            else:
-                raise ValueError("Unknown metric for log-reg pipeline")
-            for method, entry in metric_dict.items():
-                vals = entry["raw"]
-                if any(np.isnan(vals)):
-                    ok = False
-                    break
-
-            if not ok:
-                break
-
-        if ok:
-            valid_k.append(k)
-
-    k_vector = valid_k
 
     rows = []
 
-
-    for seed in results.keys():
-        for k in k_vector:
-
-            # select metric dictionary
-            if metric == "rmse":
-                metric_dict = results[seed][k]["loss"]
-            elif metric == "time_scores":
-                metric_dict = results[seed][k]["time_scores"]
-            elif metric == "time_model":
-                metric_dict = results[seed][k]["time_model"]
-            elif metric == "brier":
-                metric_dict = results[seed][k]["loss"]
-            elif metric == "ce":
-                metric_dict = results[seed][k]["ce"]
-            elif metric == "ce_train":
-                metric_dict = results[seed][k]["ce_train"]
-            elif metric == "rmse_train":
-                metric_dict = results[seed][k]["train_loss"]
-            else:
-                raise ValueError("metric must be 'rmse', 'time_scores', or 'brier'.")
-
-            for method, entry in metric_dict.items():
-
-                # extract values
-                if metric in ["rmse", "brier", "time_scores", "time_model", "ce", "ce_train", "rmse_train"]:
-                    values = entry["raw"]
-
-                # aggregate
-                if aggregate == "raw":
-                    for rep_idx, val in enumerate(values):
-                        rows.append({
-                            "Seed": seed,
-                            "k": k,
-                            "Method": method,
-                            "Replication": rep_idx + 1,
-                            "Loss": val
-                        })
-
-                elif aggregate == "mean":
-                    rows.append({
-                        "Seed": seed,
-                        "k": k,
-                        "Method": method,
-                        "Replication": None,
-                        "Loss": float(np.mean(values))
-                    })
-
-                elif aggregate == "median":
-                    rows.append({
-                        "Seed": seed,
-                        "k": k,
-                        "Method": method,
-                        "Replication": None,
-                        "Loss": float(np.median(values))
-                    })
-
-                else:
-                    raise ValueError("aggregate must be 'raw', 'mean', or 'median'.")
+    for method, arr in scores_single.items():
+        arr = np.asarray(arr).reshape(-1)
+        for v in arr:
+            rows.append({
+                "Method": method,
+                "value": v
+            })
 
     df = pd.DataFrame(rows)
-    df["k"] = df["k"].astype("category")
 
-    # Full model only exists for rmse/brier
-    if metric in ["rmse", "brier", "ce", "ce_train", "rmse_train"]:
-        df_no_full = df[df["Method"] != "Full"]
-    else:
-        df_no_full = df
-
-    metric_name = {
-        "rmse": "RMSE",
-        "rmse_train": "RMSE (Train)",
-        "time_scores": "Score Computation Time (s)",
-        "brier": "Brier Score",
-        "time_model": "Modeling Time (s)",
-        "ce": "Cross-Entropy",
-        "ce_train": "Cross-Entropy (Train)",
-    }[metric]
-
-
-    # facet by method
-    p_method = (
-        ggplot(df_no_full, aes(x="k", y="Loss", fill="Method"))
-        + geom_abline(slope=0, intercept=np.median(df[df["Method"] == "Full"]["Loss"]), color="black")
-        + geom_boxplot()
-        + facet_wrap("~ Method", scales="fixed")
-        + theme_bw()
-        + theme(figure_size=(25, 18))
+    p = (
+        ggplot(df, aes(x="value"))
+        + geom_histogram(bins=80, fill="#4C72B0", alpha=0.7)
+        + facet_wrap("~Method", ncol=2, scales="free")
+        + theme_minimal()
         + labs(
-            title=f"{metric_name} per Method across k",
-            x="k",
-            y=metric_name
-        )
-        + lims(y=(np.median(df[df["Method"] == "Full"]["Loss"]) - 0.1,np.max(df_no_full["Loss"])))
-    )
-
-    # facet by k
-    p_k = (
-        ggplot(df, aes(x="Method", y="Loss", fill="Method"))
-        + geom_boxplot()
-        + facet_wrap("~ k", scales="fixed")
-        + theme_bw()
-        + theme(figure_size=(25, 10))
-        + labs(
-            title=f"{metric_name} per k across Methods (aggregate={aggregate})",
-            x="Method",
-            y=metric_name
+            x="Score",
+            y="Count"
         )
     )
-
-    #  Add log-scale for CE metrics
-    if metric in ["ce", "ce_train"]:
-        p_method = p_method + scale_y_log10()
-        p_k = p_k + scale_y_log10()
 
     if save_path is not None:
         os.makedirs(save_path, exist_ok=True)
-        p_method.save(os.path.join(save_path, f"facet_method_{metric}_{dataset}_{aggregate}.pdf"))
-        p_k.save(os.path.join(save_path, f"facet_k_{metric}_{dataset}_{aggregate}.pdf"))
-        print("Plots saved.")
 
-    display(p_method)
-    display(p_k)
+        file_path = os.path.join(
+            save_path,
+            f"results_{pipeline}_scores_{dataset}.pdf"
+        )
+
+        p.save(file_path, limitsize=False, height=3, width=8)
+
+        print(f"Saved: {file_path}")
+
+    return p
 
 def plot_all_boxplots(
-    results, k_vector, dataset, metric="rmse", aggregate="raw", save_path=None
+    results, k_vector, dataset, metric="rmse", aggregate="raw", pipeline = "col_row", save_path=None
 ):
     rows = []
 
@@ -455,12 +187,19 @@ def plot_all_boxplots(
     # 5. Plot
     p = (
         ggplot(df_plot, aes(x="x_label", y="Loss", fill="Method"))
-        + geom_boxplot(width=0.2)
+        + geom_boxplot(width=0.4)
         + theme_bw()
         + theme(
-            figure_size=(25, 12),
-            axis_text_x=element_text(rotation=90, ha="center", size=7)
+            figure_size=(25, 16),
+            axis_text_x=element_text(rotation=90, ha="center", size=16),
+            axis_text_y=element_text(size=16),
+            axis_title_x=element_text(size=20),
+            axis_title_y=element_text(size=16),
+            legend_position='bottom',
+            legend_text=element_text(size=18),
+            legend_title=element_text(size=20)
         )
+
         + labs(
             x="Method | k",
             y=metric_name
@@ -470,14 +209,11 @@ def plot_all_boxplots(
     # 6. Speichern
     if save_path is not None:
         os.makedirs(save_path, exist_ok=True)
-        file_path = os.path.join(save_path, f"all_45_boxplots_{metric}_{dataset}.pdf")
+        file_path = os.path.join(save_path, f"results_{pipeline}_{metric}_{dataset}.pdf")
         p.save(file_path, limitsize=False)
         print(f"Saved: {file_path}")
 
     display(p)
-
-
-
 
 def extract_dimensions(entry):
     """

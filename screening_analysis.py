@@ -2,7 +2,10 @@ import pandas as pd
 import numpy as np
 import os
 from IPython.display import display
-from plotnine import ggplot, aes, geom_boxplot, theme_minimal, labs, facet_wrap
+from plotnine import (
+    ggplot, aes, geom_boxplot, theme_minimal, labs,
+    facet_wrap, facet_grid, theme, theme_bw, element_text
+)
 
 
 def get_beta_hits(base, folder, C, reps, beta_lasso=None):
@@ -295,121 +298,150 @@ def evaluate_screening_performance(base, folder, C, reps):
     )
 
 def collect_screening_results(results, k_vector, base, folder, reps):
+    """
+    Universal screening for CUR + Lasso pipelines.
+    Computes TP, FP, FN, TN, TPR, FDR, MCC for all methods present.
+    """
+
     rows = []
+
+    # Load true beta vectors
+    beta = [
+        pd.read_csv(f"{base}/{folder}/beta{i+1}.csv").to_numpy().reshape(-1)
+        for i in range(reps)
+    ]
+    beta_nonzero = [np.where(beta[i] != 0)[0] for i in range(reps)]
 
     for seed in results.keys():
         for k in k_vector:
 
-            # Extract selected columns for this seed/k
-            C = results[seed][k]["selected_columns"]
+            entry = results[seed][k]
 
-            # Skip soft aborts or invalid structures
-            if C is None:
+            # selected columns must exist
+            if "selected_columns" not in entry:
                 continue
 
-            # Skip if C is a list (invalid)
-            if not isinstance(C, dict):
+            C = entry["selected_columns"]
+            if C is None or not isinstance(C, dict):
                 continue
 
-            # Skip if required keys missing
-            required = {"CLS", "LS", "RS", "CS"}
-            if not required.issubset(C.keys()):
-                continue
+            # detect methods dynamically
+            methods = list(C.keys())
 
-            # Compute screening metrics
-            beta, beta_nonzero, cls_hits, ls_hits, rs_hits, cs_hits, _ = \
-                get_beta_hits(base, folder, C, reps)
+            for method in methods:
+                for rep in range(reps):
 
-            cls_share, ls_share, rs_share, cs_share, _ = \
-                get_beta_share(beta, C)
+                    selected_cols = np.array(C[method][rep])
+                    true_cols = beta_nonzero[rep]
 
-            # Build rows
-            for rep in range(reps):
-                p = len(beta_nonzero[rep])
+                    p_true = len(true_cols)
+                    total_features = len(beta[rep])
 
-                rows.append({
-                    "Seed": seed,
-                    "k": k,
-                    "Method": "CLS",
-                    "Replication": rep+1,
-                    "HitPercentage": len(cls_hits[rep]) / p * 100,
-                    "BetaShare": cls_share[rep]
-                })
-                rows.append({
-                    "Seed": seed,
-                    "k": k,
-                    "Method": "LS",
-                    "Replication": rep+1,
-                    "HitPercentage": len(ls_hits[rep]) / p * 100,
-                    "BetaShare": ls_share[rep]
-                })
-                rows.append({
-                    "Seed": seed,
-                    "k": k,
-                    "Method": "RS",
-                    "Replication": rep+1,
-                    "HitPercentage": len(rs_hits[rep]) / p * 100,
-                    "BetaShare": rs_share[rep]
-                })
-                rows.append({
-                    "Seed": seed,
-                    "k": k,
-                    "Method": "CS",
-                    "Replication": rep+1,
-                    "HitPercentage": len(cs_hits[rep]) / p * 100,
-                    "BetaShare": cs_share[rep]
-                })
+                    # --- Confusion matrix ---
+                    TP = len(np.intersect1d(selected_cols, true_cols))
+                    FP = len(selected_cols) - TP
+                    FN = p_true - TP
+                    TN = total_features - p_true - FP
+
+                    # --- Metrics ---
+                    TPR = TP / (TP + FN) if (TP + FN) > 0 else 0
+                    FDR = FP / (TP + FP) if (TP + FP) > 0 else 0
+
+                    denom = np.sqrt(
+                        (TP + FP) *
+                        (TP + FN) *
+                        (TN + FP) *
+                        (TN + FN)
+                    )
+                    MCC = ((TP * TN - FP * FN) / denom) if denom > 0 else 0
+
+                    rows.append({
+                        "Seed": seed,
+                        "k": k,
+                        "Method": method,
+                        "Replication": rep + 1,
+                        "TP": TP,
+                        "FP": FP,
+                        "FN": FN,
+                        "TN": TN,
+                        "TPR": TPR,
+                        "FDR": FDR,
+                        "MCC": MCC,
+                        "Selected": len(selected_cols),
+                        "SelectedColumns": selected_cols,
+                        "p_true": p_true,
+                        "TotalFeatures": total_features
+                    })
 
     df = pd.DataFrame(rows)
     df["k"] = df["k"].astype("category")
     return df
 
-def plot_screening_facets(df, dataset, metric="HitPercentage", aggregate="raw", save_path=None):
-    metric_label = {
-        "HitPercentage": "True Positive Rate (%)",
-        "BetaShare": "Beta Share (%)"
-    }[metric]
+def plot_screening_metrics(df, dataset="dataset", pipeline="screening", save_path=None):
 
-    if aggregate == "raw":
-        df_plot = df
-    elif aggregate == "mean":
-        df_plot = df.groupby(["Seed", "k", "Method"])[metric].mean().reset_index()
-    elif aggregate == "median":
-        df_plot = df.groupby(["Seed", "k", "Method"])[metric].median().reset_index()
-    else:
-        raise ValueError("aggregate must be raw/mean/median")
+    df = df.copy()
 
-    # facet by method
-    p_method = (
-        ggplot(df_plot, aes(x="k", y=metric, fill="Method"))
-        + geom_boxplot()
-        + facet_wrap("~ Method", scales="fixed")
+    # median over replications
+    df = (
+        df.groupby(["Seed", "k", "Method"])
+          .agg({
+              "TPR": "median",
+              "FDR": "median",
+              "MCC": "median"
+          })
+          .reset_index()
+    )
+
+    # long format
+    metrics_long = df.melt(
+        id_vars=["Seed", "k", "Method"],
+        value_vars=["TPR", "FDR", "MCC"],
+        var_name="Metric",
+        value_name="Value"
+    )
+
+    metrics_long["k"] = metrics_long["k"].astype(int)
+    metrics_long["x_label"] = metrics_long["Method"] + " | " + metrics_long["k"].astype(str)
+
+    # sort
+    combos = metrics_long[["Method", "k"]].drop_duplicates()
+    method_sorted = sorted(combos["Method"].unique())
+    k_sorted = sorted(combos["k"].unique())
+
+    x_order = []
+    for m in method_sorted:
+        for k in k_sorted:
+            if ((combos["Method"] == m) & (combos["k"] == k)).any():
+                x_order.append(f"{m} | {k}")
+
+    metrics_long["x_label"] = pd.Categorical(metrics_long["x_label"], categories=x_order, ordered=True)
+    metrics_long = metrics_long.sort_values("x_label")
+
+    p = (
+        ggplot(metrics_long, aes(x="x_label", y="Value", fill="Method"))
+        + geom_boxplot(width=0.4)
+        + facet_wrap("~ Metric", ncol=1, scales="free_y")
         + theme_minimal()
+        + theme(
+            figure_size=(25, 16),
+            axis_text_x=element_text(rotation=90, ha="center", size=14),
+            axis_text_y=element_text(size=14),
+            axis_title_x=element_text(size=18),
+            axis_title_y=element_text(size=18),
+            strip_text=element_text(size=20),
+            legend_position='bottom',
+            legend_text=element_text(size=16),
+            legend_title=element_text(size=18)
+        )
         + labs(
-            title=f"{metric_label} per Method across k (aggregate={aggregate})",
-            x="k",
-            y=metric_label
+            x="Method | k",
+            y="Metric Value"
         )
     )
 
-    # facet by k
-    p_k = (
-        ggplot(df_plot, aes(x="Method", y=metric, fill="Method"))
-        + geom_boxplot()
-        + facet_wrap("~ k", scales="fixed")
-        + theme_minimal()
-        + labs(
-            title=f"{metric_label} per k across Methods (aggregate={aggregate})",
-            x="Method",
-            y=metric_label
-        )
-    )
-
-    display(p_method)
-    display(p_k)
+    display(p)
 
     if save_path is not None:
         os.makedirs(save_path, exist_ok=True)
-        p_method.save(os.path.join(save_path, f"screening_method_{metric}_{dataset}_{aggregate}.pdf"))
-        p_k.save(os.path.join(save_path, f"screening_k_{metric}_{dataset}_{aggregate}.pdf"))
-        print("Plots saved.")
+        p.save(os.path.join(save_path, f"screening_metrics_{pipeline}_{dataset}.pdf"), limitsize=False)
+        print("Saved combined metric plot.")

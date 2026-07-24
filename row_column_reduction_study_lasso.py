@@ -282,16 +282,19 @@ def lasso_modeling(R_reduced, df_train, df_test, y_train, y_test, y_reduced, k):
     rmse_train_theo, rmse_test_theo = [], []
     feats_theo, betas_theo = [], []
     time_theo = []
+    selected_theo = []
 
     # containers for binary Lasso
     rmse_train_bin, rmse_test_bin = [], []
     feats_bin, betas_bin, alphas_bin = [], [], []
     time_bin = []
+    selected_bin = []
 
     # containers for CLS-EXPECTED(c) Lasso
     rmse_train_cls_exp, rmse_test_cls_exp = [], []
     feats_cls_exp, betas_cls_exp, alphas_cls_exp = [], [], []
     time_cls_exp = []
+    selected_cls = []
 
     # loop over replications
     for i in range(len(R_reduced)):
@@ -308,6 +311,7 @@ def lasso_modeling(R_reduced, df_train, df_test, y_train, y_test, y_reduced, k):
         time_theo.append(time.time() - t0)
         feats_theo.append(n_t)
         betas_theo.append(model_t.coef_)
+        selected_theo.append(np.where(model_t.coef_ != 0)[0])
 
         X_train = df_train[i]
         preds_train_t = model_t.predict(scaler_t.transform(X_train))
@@ -331,6 +335,7 @@ def lasso_modeling(R_reduced, df_train, df_test, y_train, y_test, y_reduced, k):
         n_b = np.sum(model_b.coef_ != 0)
         feats_bin.append(n_b)
         betas_bin.append(model_b.coef_)
+        selected_bin.append(np.where(model_b.coef_ != 0)[0])
 
         preds_train_b = model_b.predict(scaler_b.transform(X_train))
         rmse_train_bin.append(np.sqrt(mean_squared_error(y_train[i], preds_train_b)))
@@ -373,6 +378,7 @@ def lasso_modeling(R_reduced, df_train, df_test, y_train, y_test, y_reduced, k):
         n_c = np.sum(model_c.coef_ != 0)
         feats_cls_exp.append(n_c)
         betas_cls_exp.append(model_c.coef_)
+        selected_cls.append(np.where(model_c.coef_ != 0)[0])
 
         # compute RMSE train
         preds_train_c = model_c.predict(X_train_red_scaled)
@@ -417,7 +423,14 @@ def lasso_modeling(R_reduced, df_train, df_test, y_train, y_test, y_reduced, k):
         "Lasso_CLS": time_cls_exp
     }
 
-    return rmse_train, rmse_test, betas, feature_counts, alphas, times
+    selected_columns = {
+        "Lasso_Theo": selected_theo,
+        "Lasso_Bin": selected_bin,
+        "Lasso_CLS": selected_cls
+    }
+
+    return rmse_train, rmse_test, betas, feature_counts, alphas, times, selected_columns
+
 
 def apply_lasso_after_row_reduction(
         k,
@@ -491,7 +504,7 @@ def apply_lasso_after_row_reduction(
         y_reduced.append(y_i)
 
     print("Running Lasso (theoretical + binary + CLS)...")
-    rmse_train, rmse_test, betas, feature_counts, alphas, times = lasso_modeling(
+    rmse_train, rmse_test, betas, feature_counts, alphas, times, selected_columns = lasso_modeling(
         R_reduced,
         X_train_list,
         X_test_list,
@@ -508,7 +521,8 @@ def apply_lasso_after_row_reduction(
         "rmse_test": rmse_test,
         "feature_counts": feature_counts,
         "alphas": alphas,
-        "model_time": times
+        "model_time": times,
+        "selected_columns": selected_columns
     }
 
 
