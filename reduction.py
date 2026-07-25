@@ -221,6 +221,7 @@ def estimate_mu(C, y):
         Estimated mu (>= 1.0001).
     """
     model = LogisticRegression(
+        penalty=None,
         solver="lbfgs",
         max_iter=2000
     )

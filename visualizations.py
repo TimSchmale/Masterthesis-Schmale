@@ -12,8 +12,9 @@ import pandas as pd
 from IPython.display import display
 from plotnine import (
     ggplot, aes,
-    geom_boxplot, geom_histogram,
+    geom_boxplot, geom_histogram, geom_hline,
     facet_wrap, theme_bw, theme_minimal, theme, element_text,
+    scale_y_log10,
     labs
 )
 
@@ -92,7 +93,7 @@ def _save_plot(p, save_path, filename):
 def plot_loss_boxplots(
     results, k_vector, metric="rmse_test",
     pipeline="col_row", dataset="p1000",
-    aggregate="median", save_path=None
+    aggregate="median", log_y=False, save_path=None
 ):
     """Boxplots of loss metrics across methods and k values.
 
@@ -183,6 +184,7 @@ def plot_loss_boxplots(
         "time_reduction": "Reduction Time (s)",
         "time_scores": "Score Computation Time (s)",
         "time_alpha_search": "Alpha Search Time (s)",
+        "time_total": "Total Computation Time (s)",
     }
     y_label = metric_names.get(metric, metric)
 
@@ -192,6 +194,9 @@ def plot_loss_boxplots(
         + _standard_theme()
         + labs(x="Method | k", y=y_label)
     )
+
+    if log_y:
+        p = p + scale_y_log10()
 
     _save_plot(p, save_path, f"results_{pipeline}_{metric}_{dataset}.pdf")
     display(p)
