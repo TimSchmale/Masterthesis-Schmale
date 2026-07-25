@@ -1,4 +1,4 @@
-# CUR Reduction Study — Refactored Pipeline
+# Regression for Large Matrices with Joint Column and Row Reduction
 
 Sampling-variance study for CUR-based dimensionality reduction applied to
 linear regression, logistic regression, and Lasso.
