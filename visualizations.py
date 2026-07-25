@@ -294,7 +294,13 @@ def plot_score_distributions(scores_single, pipeline=None, dataset=None,
     )
 
     if save_path is not None:
-        _save_plot(p, save_path, f"results_{pipeline}_scores_{dataset}.pdf")
+        os.makedirs(save_path, exist_ok=True)
+        file_path = os.path.join(
+            save_path,
+            f"results_{pipeline}_scores_{dataset}.pdf"
+        )
+        p.save(file_path, limitsize=False, height=3, width=8)
+        print(f"Saved: {file_path}")
 
     display(p)
     return p
