@@ -19,6 +19,7 @@ venv/
 # Data
 Simulation Data/
 Results/
+Paper
 
 # Large files
 *.pkl
