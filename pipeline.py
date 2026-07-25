@@ -799,22 +799,7 @@ def run_lasso_experiment(
                 X_red = col_res["C"]
                 sel_cols = col_res["selected_columns"]
 
-                # Soft abort: more columns than sketch rows
-                if X_red.shape[1] > X_red.shape[0]:
-                    print(f"  [WARN] Lasso_CLS k={k}, rep={i}: "
-                          f"{X_red.shape[1]} cols > {X_red.shape[0]} rows. Skipping.")
-                    metrics_cls["rmse_test"].append(np.nan)
-                    metrics_cls["rmse_train"].append(np.nan)
-                    metrics_cls["n_features"].append(np.nan)
-                    metrics_cls["alpha"].append(np.nan)
-                    metrics_cls["time_fit"].append(np.nan)
-                    metrics_cls["time_alpha_search"].append(np.nan)
-                    metrics_cls["time_reduction"].append(time_sketch + time_col)
-                    metrics_cls["time_scores"].append(time_cls_scores)
-                    metrics_cls["selected_columns"].append(sel_cols)
-                    metrics_cls["coef"].append(None)
-                    continue
-
+                # No soft abort needed: Lasso handles p > n natively via L1 regularization
                 res_cls = fit_lasso(
                     X_red, y_sk, X_test_list[i], y_test_list[i],
                     k=k, mode="binary_search",
@@ -837,10 +822,10 @@ def run_lasso_experiment(
             method_results["Lasso_binary"] = metrics_binary
             method_results["Lasso_CLS"] = metrics_cls
 
-            # Oracle baseline: Lasso on true non-zero beta columns
-            method_results["Full"] = _run_full_lasso(
+            # Shared benchmark: OLS on true support (same as Pipeline 1/2/3 Full)
+            method_results["Full"] = _run_full_ols_for_lasso(
                 X_train_list, X_test_list, y_train_list, y_test_list,
-                base, data_folder, reps, k
+                base, data_folder, reps
             )
 
             seed_results[k] = method_results
@@ -855,26 +840,35 @@ def run_lasso_experiment(
     return all_results
 
 
-def _run_full_lasso(X_train_list, X_test_list, y_train_list, y_test_list,
-                    base, data_folder, reps, k):
-    """Baseline: Lasso (binary search) on full (unreduced) training data."""
+def _run_full_ols_for_lasso(X_train_list, X_test_list, y_train_list, y_test_list,
+                            base, data_folder, reps):
+    """Shared benchmark: OLS on true non-zero beta columns.
+
+    Same as _run_full_ols but returns metrics in Lasso-compatible format
+    so Pipeline 5 results can be directly compared against Pipeline 3.
+    """
     metrics = _init_lasso_metrics()
 
     for i in range(reps):
-        result = fit_lasso(
-            X_train_list[i], y_train_list[i],
+        beta = pd.read_csv(
+            f"{base}/{data_folder}/beta{i + 1}.csv"
+        ).to_numpy().ravel()
+        support = np.where(beta != 0)[0]
+
+        result = fit_ols(
+            X_train_list[i][:, support], y_train_list[i],
             X_test_list[i], y_test_list[i],
-            k=k, mode="binary_search"
+            selected_columns=support
         )
         metrics["rmse_test"].append(result["rmse_test"])
         metrics["rmse_train"].append(result["rmse_train"])
-        metrics["n_features"].append(result["n_features"])
-        metrics["alpha"].append(result["alpha"])
-        metrics["time_fit"].append(result["time_fit"])
-        metrics["time_alpha_search"].append(result["time_alpha_search"])
+        metrics["n_features"].append(len(support))
+        metrics["alpha"].append(0.0)
+        metrics["time_fit"].append(0.0)
+        metrics["time_alpha_search"].append(0.0)
         metrics["time_reduction"].append(0.0)
         metrics["time_scores"].append(0.0)
-        metrics["selected_columns"].append(None)
+        metrics["selected_columns"].append(support.tolist())
         metrics["coef"].append(result["coef"])
 
     return metrics
