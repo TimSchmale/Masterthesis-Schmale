@@ -204,6 +204,17 @@ def evaluate_experiment(results, base, data_folder, reps):
                     sel_cols = metrics["selected_columns"][i] if has_sel_cols else None
                     coef = metrics["coef"][i] if has_coef else None
 
+                    # Skip soft-aborted reps (model not fitted → NaN in loss)
+                    aborted = False
+                    for m in ("rmse_test", "brier_test"):
+                        if m in metrics and i < len(metrics[m]):
+                            val = metrics[m][i]
+                            if val is not None and np.isnan(val):
+                                aborted = True
+                                break
+                    if aborted:
+                        continue
+
                     # Skip if no selection info for this rep
                     if sel_cols is None and coef is None:
                         continue
