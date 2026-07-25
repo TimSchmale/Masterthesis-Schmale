@@ -68,6 +68,7 @@ def _standard_theme():
             axis_text_y=element_text(size=16),
             axis_title_x=element_text(size=20),
             axis_title_y=element_text(size=16),
+            strip_text=element_text(size=16),
             legend_position="bottom",
             legend_text=element_text(size=18),
             legend_title=element_text(size=20),
