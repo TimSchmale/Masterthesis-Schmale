@@ -299,7 +299,7 @@ def plot_score_distributions(scores_single, pipeline=None, dataset=None,
             save_path,
             f"results_{pipeline}_scores_{dataset}.pdf"
         )
-        p.save(file_path, limitsize=False, height=3, width=8)
+        p.save(file_path, height=3, width=8)
         print(f"Saved: {file_path}")
 
     display(p)
