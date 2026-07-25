@@ -209,7 +209,6 @@ def fit_logistic(X_train, y_train, X_test, y_test, selected_columns=None):
         "coef" : ndarray of shape (t,)
     """
     model = LogisticRegression(
-        penalty=None,
         solver="lbfgs",
         max_iter=2000
     )
