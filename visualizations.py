@@ -188,10 +188,15 @@ def plot_loss_boxplots(
     }
     y_label = metric_names.get(metric, metric)
 
+    # Adjust figure height by metric type
+    is_time = metric.startswith("time")
+    fig_h = 10 if is_time else 14
+
     p = (
         ggplot(df_plot, aes(x="x_label", y="Loss", fill="Method"))
         + geom_boxplot(width=0.4)
         + _standard_theme()
+        + theme(figure_size=(25, fig_h))
         + labs(x="Method | k", y=y_label)
     )
 
