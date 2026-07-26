@@ -430,6 +430,7 @@ def plot_n_selected(screening_df, pipeline="col_row", dataset="p1000",
         ggplot(df_plot, aes(x="x_label", y="Loss", fill="Method"))
         + geom_boxplot(width=0.4)
         + _standard_theme()
+        + theme(figure_size=(25, 10))
         + labs(x="Method | k", y="Number of Selected Features")
     )
 
