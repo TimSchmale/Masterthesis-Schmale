@@ -272,6 +272,98 @@ def plot_screening_boxplots(
 
 
 # =============================================================================
+# Time Decomposition Plot
+# =============================================================================
+
+def plot_time_decomposition(
+    results, k_vector, pipeline="col_row", dataset="p1000",
+    aggregate="median", save_path=None
+):
+    """Faceted boxplots decomposing total time into 3 components.
+
+    Three panels (like screening): Score Time, Reduction Time, Model Time.
+
+    Parameters
+    ----------
+    results : dict
+        Pipeline output: {seed: {k: {method: {metric: [values]}}}}.
+    k_vector : list of int
+    pipeline, dataset : str
+    aggregate : {"raw", "mean", "median"}
+    save_path : str or None
+    """
+    # Map internal metric keys to display names
+    time_components = {
+        "time_scores": "Score Computation",
+        "time_reduction": "Reduction (Column + Row)",
+    }
+    # Detect model time key (Lasso uses time_fit, OLS/Logistic use time_model)
+    sample_method = next(iter(next(iter(next(iter(results.values())).values())).values()))
+    if "time_fit" in sample_method:
+        time_components["time_fit"] = "Model Fit"
+    elif "time_model" in sample_method:
+        time_components["time_model"] = "Model Fit"
+
+    # Filter valid k
+    valid_k = [k for k in k_vector
+               if all(k in results[s] for s in results)]
+
+    rows = []
+    for seed in results:
+        for k in valid_k:
+            for method, metrics in results[seed][k].items():
+                for metric_key, metric_label in time_components.items():
+                    if metric_key not in metrics:
+                        continue
+                    values = np.asarray(metrics[metric_key])
+                    if np.all(np.isnan(values)):
+                        continue
+
+                    if aggregate == "raw":
+                        for val in values:
+                            if not np.isnan(val):
+                                rows.append({
+                                    "Seed": seed, "k": k, "Method": method,
+                                    "Metric": metric_label, "Loss": val
+                                })
+                    elif aggregate == "mean":
+                        rows.append({
+                            "Seed": seed, "k": k, "Method": method,
+                            "Metric": metric_label,
+                            "Loss": float(np.nanmean(values))
+                        })
+                    elif aggregate == "median":
+                        rows.append({
+                            "Seed": seed, "k": k, "Method": method,
+                            "Metric": metric_label,
+                            "Loss": float(np.nanmedian(values))
+                        })
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        print("No data to plot.")
+        return
+
+    # Enforce facet order
+    facet_order = [v for v in time_components.values()]
+    df["Metric"] = pd.Categorical(df["Metric"], categories=facet_order, ordered=True)
+
+    df_plot = _build_x_order(df)
+
+    p = (
+        ggplot(df_plot, aes(x="x_label", y="Loss", fill="Method"))
+        + geom_boxplot(width=0.4)
+        + facet_wrap("~Metric", ncol=1, scales="free_y")
+        + _standard_theme()
+        + theme(figure_size=(25, 18))
+        + labs(x="Method | k", y="Time (s)")
+    )
+
+    _save_plot(p, save_path, f"results_{pipeline}_time_decomposition_{dataset}.pdf")
+    display(p)
+
+
+# =============================================================================
 # Score Distribution Plots
 # =============================================================================
 
