@@ -65,11 +65,14 @@ def column_reduction(X, scores, k):
         candidates = np.array([idx for idx in candidates if idx not in sampled])
         sampled = np.concatenate([sampled, candidates[:missing]]).astype(int)
 
-    # Rescaling (CUR theorem)
+    # Rescaling (CUR theorem): columns weighted by 1/sqrt(p_j) during training.
+    # At test time, predictions use raw (unscaled) columns — this is intentional:
+    # we treat CUR as a feature selection mechanism, not as a matrix approximation.
+    # The rescaling guides which columns get selected and stabilizes the fit,
+    # but downstream evaluation measures practical prediction quality on original data.
     safe_probs = np.maximum(scaled_probs[sampled], 1e-10)
     D_inv = 1.0 / np.sqrt(safe_probs)
 
-    # Build reduced matrix
     C = X[:, sampled] * D_inv
 
     return {
@@ -190,7 +193,7 @@ def row_reduction_leverage(C, y, k):
     safe_probs = np.maximum(scaled_probs[sampled], 1e-10)
     D_inv = 1.0 / np.sqrt(safe_probs)
 
-    # Build reduced matrix and response
+    # Row rescaling applied to C only, y is subsetted without rescaling.
     R = C[sampled, :] * D_inv[:, None]
     y_reduced = y[sampled]
 

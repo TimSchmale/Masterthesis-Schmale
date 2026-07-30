@@ -200,7 +200,9 @@ def compute_all_scores(X, y, k, rank_reduce=True):
     scores["RS"] = get_random_scores(X)
     timings["RS"] = time.perf_counter() - t0
 
-    # CS: Combined scores (uses LS and |CLS|)
+    # CS: Combined scores (reuses already-computed LS and |CLS| arrays).
+    # Timing attributed as full LS+CLS cost, since both SVDs are required
+    # to produce CS — reflects end-to-end cost of choosing CS as a method.
     scores["CS"] = get_combined_scores(
         X, y, k, p_leverage=0.2,
         ls=scores["LS"], cls=np.abs(scores["CLS"])

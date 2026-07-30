@@ -41,7 +41,11 @@ def fit_ols(X_train, y_train, X_test, y_test, selected_columns=None):
         "coef" : ndarray of shape (t,)
     """
     model = LinearRegression()
+
+    # Timed: only model.fit() — comparable to Lasso time_fit
+    t0 = time.perf_counter()
     model.fit(X_train, y_train)
+    time_fit = time.perf_counter() - t0
 
     # Train prediction
     y_pred_train = model.predict(X_train)
@@ -56,7 +60,8 @@ def fit_ols(X_train, y_train, X_test, y_test, selected_columns=None):
     return {
         "rmse_train": np.sqrt(mean_squared_error(y_train, y_pred_train)),
         "rmse_test": np.sqrt(mean_squared_error(y_test, y_pred_test)),
-        "coef": model.coef_
+        "coef": model.coef_,
+        "time_fit": time_fit
     }
 
 
@@ -214,7 +219,11 @@ def fit_logistic(X_train, y_train, X_test, y_test, selected_columns=None):
         solver="lbfgs",
         max_iter=2000
     )
+
+    # Timed: only model.fit() — comparable to Lasso time_fit
+    t0 = time.perf_counter()
     model.fit(X_train, y_train)
+    time_fit = time.perf_counter() - t0
 
     # Train probabilities
     p_train = model.predict_proba(X_train)[:, 1]
@@ -231,5 +240,6 @@ def fit_logistic(X_train, y_train, X_test, y_test, selected_columns=None):
         "brier_test": brier_score_loss(y_test, p_test),
         "ce_train": log_loss(y_train, p_train),
         "ce_test": log_loss(y_test, p_test),
-        "coef": model.coef_.ravel()
+        "coef": model.coef_.ravel(),
+        "time_fit": time_fit
     }

@@ -2,6 +2,31 @@
 
 One runner function per model type, with shared functions
 for data loading, score caching, and result persistence.
+
+Timing Conventions (consistent across all pipelines)
+----------------------------------------------------
+All timings use time.perf_counter() (monotonic, high-resolution).
+
+- time_scores:     Time to compute the column score vector (SVD-based).
+                   Measured internally in compute_all_scores().
+- time_reduction:  Time for ALL steps to achieve dimensionality reduction:
+                   column_first: column_reduction + row_reduction_leverage
+                   column_only:  column_reduction
+                   row_first:    row_reduction_sketch + column_reduction
+                   logistic:     column_reduction + estimate_mu + row_reduction_coreset
+                   lasso:        row_reduction_sketch + alpha_search [+ column_reduction for CLS]
+                   Note: Lasso's alpha search IS its sparsity/reduction mechanism
+                   (analogous to CUR's column selection), hence included here.
+- time_model:      Time for model.fit() ONLY (no predict, no metric eval).
+                   Measured internally in fit_ols/fit_logistic/fit_lasso.
+                   Comparable across all pipelines.
+- time_fit:        (Lasso only) Same as time_model, kept for backward compat.
+- time_alpha_search: (Lasso only) Time for alpha selection (binary search
+                   or theoretical computation). Included in time_reduction,
+                   stored separately for detailed analysis.
+
+Total computational cost for fair comparison:
+    time_total = time_scores + time_reduction + time_model
 """
 
 import numpy as np
@@ -236,13 +261,16 @@ def run_ols_experiment(
                 # per method on the SAME sketch.
                 # =============================================================
 
-                # Step 1: Sketch all reps
+                # Step 1: Sketch all reps (timed)
                 R_list = []
                 y_sk_list = []
+                time_sketch_list = []
                 for i in range(reps):
+                    t0 = time.perf_counter()
                     R, y_sk = row_reduction_sketch(
                         X_train_list[i], y_train_list[i], k
                     )
+                    time_sketch_list.append(time.perf_counter() - t0)
                     R_list.append(R)
                     y_sk_list.append(y_sk)
 
@@ -270,7 +298,9 @@ def run_ols_experiment(
                         X_red = col_res["C"]
                         y_red = y_sk_list[i]
                         sel_cols = col_res["selected_columns"]
-                        time_red = time.perf_counter() - t0
+                        time_col = time.perf_counter() - t0
+                        # time_reduction = sketch + column reduction
+                        time_red = time_sketch_list[i] + time_col
 
                         reductions_rf[method][i] = {
                             "X_red": X_red, "y_red": y_red,
@@ -306,15 +336,13 @@ def run_ols_experiment(
                             metrics["selected_columns"].append(sel_cols)
                             continue
 
-                        # Modeling
-                        t0 = time.perf_counter()
+                        # Modeling (time_model = only model.fit via internal timing)
                         result = fit_ols(X_red, y_red, X_test_list[i], y_test_list[i],
                                          selected_columns=sel_cols)
-                        time_mod = time.perf_counter() - t0
 
                         metrics["rmse_test"].append(result["rmse_test"])
                         metrics["rmse_train"].append(result["rmse_train"])
-                        metrics["time_model"].append(time_mod)
+                        metrics["time_model"].append(result["time_fit"])
                         metrics["time_reduction"].append(time_red)
                         metrics["time_scores"].append(all_sketch_timings[i][method])
                         metrics["selected_columns"].append(sel_cols)
@@ -387,15 +415,13 @@ def run_ols_experiment(
                             metrics["selected_columns"].append(sel_cols)
                             continue
 
-                        # Modeling
-                        t0 = time.perf_counter()
+                        # Modeling (time_model = only model.fit via internal timing)
                         result = fit_ols(X_red, y_red, X_test_list[i], y_test_list[i],
                                          selected_columns=sel_cols)
-                        time_mod = time.perf_counter() - t0
 
                         metrics["rmse_test"].append(result["rmse_test"])
                         metrics["rmse_train"].append(result["rmse_train"])
-                        metrics["time_model"].append(time_mod)
+                        metrics["time_model"].append(result["time_fit"])
                         metrics["time_reduction"].append(time_red)
                         metrics["time_scores"].append(cached_timings[k][method][i])
                         metrics["selected_columns"].append(sel_cols)
@@ -433,8 +459,7 @@ def _run_full_ols(X_train_list, X_test_list, y_train_list, y_test_list,
         ).to_numpy().ravel()
         support = np.where(beta != 0)[0]
 
-        # Fit on true support
-        t0 = time.perf_counter()
+        # Fit on true support (time_model = internal time_fit)
         result = fit_ols(
             X_train_list[i][:, support], y_train_list[i],
             X_test_list[i], y_test_list[i],
@@ -442,7 +467,7 @@ def _run_full_ols(X_train_list, X_test_list, y_train_list, y_test_list,
         )
         metrics["rmse_test"].append(result["rmse_test"])
         metrics["rmse_train"].append(result["rmse_train"])
-        metrics["time_model"].append(time.perf_counter() - t0)
+        metrics["time_model"].append(result["time_fit"])
         metrics["time_reduction"].append(0.0)
         metrics["time_scores"].append(0.0)
 
@@ -583,15 +608,13 @@ def run_logistic_experiment(
                         metrics["selected_columns"].append(sel_cols)
                         continue
 
-                    # --- Modeling ---
-                    t0 = time.perf_counter()
+                    # Modeling (time_model = only model.fit via internal timing)
                     result = fit_logistic(X_red, y_red, X_test_list[i], y_test_list[i],
                                           selected_columns=sel_cols)
-                    time_mod = time.perf_counter() - t0
 
                     metrics["brier_test"].append(result["brier_test"])
                     metrics["ce_test"].append(result["ce_test"])
-                    metrics["time_model"].append(time_mod)
+                    metrics["time_model"].append(result["time_fit"])
                     metrics["time_reduction"].append(time_red)
                     metrics["time_scores"].append(cached_timings[k][method][i])
                     metrics["selected_columns"].append(sel_cols)
@@ -628,7 +651,7 @@ def _run_full_logistic(X_train_list, X_test_list, y_train_list, y_test_list,
         ).to_numpy().ravel()
         support = np.where(beta != 0)[0]
 
-        t0 = time.perf_counter()
+        # time_model = internal time_fit
         result = fit_logistic(
             X_train_list[i][:, support], y_train_list[i],
             X_test_list[i], y_test_list[i],
@@ -636,7 +659,7 @@ def _run_full_logistic(X_train_list, X_test_list, y_train_list, y_test_list,
         )
         metrics["brier_test"].append(result["brier_test"])
         metrics["ce_test"].append(result["ce_test"])
-        metrics["time_model"].append(time.perf_counter() - t0)
+        metrics["time_model"].append(result["time_fit"])
         metrics["time_reduction"].append(0.0)
         metrics["time_scores"].append(0.0)
 
@@ -651,7 +674,7 @@ def _init_lasso_metrics():
     """Initialize empty metrics dict for a Lasso variant."""
     return {"rmse_test": [], "rmse_train": [],
             "n_features": [], "alpha": [],
-            "time_fit": [], "time_alpha_search": [],
+            "time_model": [], "time_fit": [], "time_alpha_search": [],
             "time_reduction": [], "time_scores": [],
             "selected_columns": [], "coef": []}
 
@@ -760,6 +783,7 @@ def run_lasso_experiment(
                 metrics_theo["rmse_train"].append(res_theo["rmse_train"])
                 metrics_theo["n_features"].append(res_theo["n_features"])
                 metrics_theo["alpha"].append(res_theo["alpha"])
+                metrics_theo["time_model"].append(res_theo["time_fit"])
                 metrics_theo["time_fit"].append(res_theo["time_fit"])
                 metrics_theo["time_alpha_search"].append(res_theo["time_alpha_search"])
                 metrics_theo["time_reduction"].append(time_sketch)
@@ -777,6 +801,7 @@ def run_lasso_experiment(
                 metrics_binary["rmse_train"].append(res_binary["rmse_train"])
                 metrics_binary["n_features"].append(res_binary["n_features"])
                 metrics_binary["alpha"].append(res_binary["alpha"])
+                metrics_binary["time_model"].append(res_binary["time_fit"])
                 metrics_binary["time_fit"].append(res_binary["time_fit"])
                 metrics_binary["time_alpha_search"].append(res_binary["time_alpha_search"])
                 metrics_binary["time_reduction"].append(time_sketch)
@@ -810,6 +835,7 @@ def run_lasso_experiment(
                 metrics_cls["rmse_train"].append(res_cls["rmse_train"])
                 metrics_cls["n_features"].append(res_cls["n_features"])
                 metrics_cls["alpha"].append(res_cls["alpha"])
+                metrics_cls["time_model"].append(res_cls["time_fit"])
                 metrics_cls["time_fit"].append(res_cls["time_fit"])
                 metrics_cls["time_alpha_search"].append(res_cls["time_alpha_search"])
                 metrics_cls["time_reduction"].append(time_sketch + time_col)
@@ -864,7 +890,8 @@ def _run_full_ols_for_lasso(X_train_list, X_test_list, y_train_list, y_test_list
         metrics["rmse_train"].append(result["rmse_train"])
         metrics["n_features"].append(len(support))
         metrics["alpha"].append(0.0)
-        metrics["time_fit"].append(0.0)
+        metrics["time_model"].append(result["time_fit"])
+        metrics["time_fit"].append(result["time_fit"])
         metrics["time_alpha_search"].append(0.0)
         metrics["time_reduction"].append(0.0)
         metrics["time_scores"].append(0.0)
