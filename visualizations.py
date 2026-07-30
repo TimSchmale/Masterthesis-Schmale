@@ -126,11 +126,23 @@ def plot_loss_boxplots(
         for k in valid_k:
             for method, metrics in results[seed][k].items():
 
+                # Abort mask: for time metrics, exclude reps where model fit
+                # was aborted (time_model = NaN). Non-time metrics handle
+                # NaN naturally via their own values.
+                if metric.startswith("time"):
+                    if "time_model" in metrics:
+                        valid_mask = ~np.isnan(np.asarray(metrics["time_model"]))
+                    elif "time_fit" in metrics:
+                        valid_mask = ~np.isnan(np.asarray(metrics["time_fit"]))
+                    else:
+                        valid_mask = None
+                else:
+                    valid_mask = None
+
                 # Compute time_total on the fly
                 if metric == "time_total":
                     t_scores = np.asarray(metrics.get("time_scores", [0.0] * len(next(iter(metrics.values())))))
                     t_reduction = np.asarray(metrics.get("time_reduction", [0.0] * len(t_scores)))
-                    # Lasso uses time_fit, OLS/Logistic uses time_model
                     if "time_fit" in metrics:
                         t_model = np.asarray(metrics["time_fit"])
                     elif "time_model" in metrics:
@@ -143,8 +155,12 @@ def plot_loss_boxplots(
                 else:
                     values = np.asarray(metrics[metric])
 
-                # Skip all-NaN
-                if np.all(np.isnan(values)):
+                # Apply abort mask for time metrics
+                if valid_mask is not None:
+                    values = values[valid_mask]
+
+                # Skip empty or all-NaN
+                if len(values) == 0 or np.all(np.isnan(values)):
                     continue
 
                 if aggregate == "raw":
@@ -295,7 +311,7 @@ def plot_time_decomposition(
     # Map internal metric keys to display names
     time_components = {
         "time_scores": "Score Computation",
-        "time_reduction": "Reduction (Column + Row)",
+        "time_reduction": "Reduction",
     }
     # Detect model time key (Lasso uses time_fit, OLS/Logistic use time_model)
     sample_method = next(iter(next(iter(next(iter(results.values())).values())).values()))
@@ -312,11 +328,19 @@ def plot_time_decomposition(
     for seed in results:
         for k in valid_k:
             for method, metrics in results[seed][k].items():
+                # Abort mask: exclude reps where time_model is NaN (soft abort)
+                if "time_model" in metrics:
+                    valid_mask = ~np.isnan(np.asarray(metrics["time_model"]))
+                elif "time_fit" in metrics:
+                    valid_mask = ~np.isnan(np.asarray(metrics["time_fit"]))
+                else:
+                    continue
+
                 for metric_key, metric_label in time_components.items():
                     if metric_key not in metrics:
                         continue
-                    values = np.asarray(metrics[metric_key])
-                    if np.all(np.isnan(values)):
+                    values = np.asarray(metrics[metric_key])[valid_mask]
+                    if len(values) == 0 or np.all(np.isnan(values)):
                         continue
 
                     if aggregate == "raw":
