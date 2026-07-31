@@ -247,5 +247,6 @@ def fit_logistic(X_train, y_train, X_test, y_test, selected_columns=None):
         "ce_train": log_loss(y_train, p_train),
         "ce_test": log_loss(y_test, p_test),
         "coef": model.coef_.ravel(),
+        "C_best": float(model.C_[0]),
         "time_fit": time_fit
     }
