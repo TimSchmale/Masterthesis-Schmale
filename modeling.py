@@ -6,7 +6,7 @@ Provides model-agnostic fitting functions that work on reduced
 
 import numpy as np
 import time
-from sklearn.linear_model import LinearRegression, Lasso, LogisticRegression
+from sklearn.linear_model import LinearRegression, Lasso, LogisticRegression, LogisticRegressionCV
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_squared_error, brier_score_loss, log_loss
 
@@ -131,7 +131,7 @@ def fit_lasso(X_train, y_train, X_test, y_test, k,
     k : int
         Target rank / sparsity level.
     mode : {"theoretical", "binary_search"}
-        - "theoretical": alpha = 1/sqrt(k)
+        - "theoretical": alpha = 1/sqrt(2k)
         - "binary_search": finds alpha yielding ~k non-zero features
     selected_columns : list of int, optional
         Column indices for subsetting X_test.
@@ -152,7 +152,7 @@ def fit_lasso(X_train, y_train, X_test, y_test, k,
     # Select alpha (timed separately)
     t0 = time.perf_counter()
     if mode == "theoretical":
-        alpha = 1.0 / np.sqrt(k)
+        alpha = 1.0 / np.sqrt(2 * k)
     else:
         alpha = find_lasso_alpha(X_train_scaled, y_train, k)
     time_alpha_search = time.perf_counter() - t0
@@ -186,10 +186,12 @@ def fit_lasso(X_train, y_train, X_test, y_test, k,
 
 
 def fit_logistic(X_train, y_train, X_test, y_test, selected_columns=None):
-    """Fit logistic regression on (reduced) training data.
+    """Fit logistic regression with CV-tuned regularization on (reduced) data.
 
-    Unregularized logistic regression (penalty=None) is used to
-    evaluate the quality of the CUR reduction for classification.
+    Uses 5-fold cross-validation to select the best regularization
+    parameter C from 10 log-spaced candidates. This ensures the
+    regularization strength adapts to the effective dimensionality
+    after CUR reduction.
 
     Parameters
     ----------
@@ -212,15 +214,19 @@ def fit_logistic(X_train, y_train, X_test, y_test, selected_columns=None):
         "ce_train" : float (cross-entropy / log loss)
         "ce_test" : float
         "coef" : ndarray of shape (t,)
+        "C_best" : float (selected regularization parameter)
+        "time_fit" : float (seconds for fit incl. CV)
     """
-    model = LogisticRegression(
+    model = LogisticRegressionCV(
+        Cs=10,
+        cv=5,
         penalty="l2",
-        C=1.0,
         solver="lbfgs",
-        max_iter=2000
+        max_iter=2000,
+        scoring="neg_log_loss",
     )
 
-    # Timed: only model.fit() — comparable to Lasso time_fit
+    # Timed: fit includes CV search — this is the full model selection cost
     t0 = time.perf_counter()
     model.fit(X_train, y_train)
     time_fit = time.perf_counter() - t0

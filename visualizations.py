@@ -388,6 +388,98 @@ def plot_time_decomposition(
 
 
 # =============================================================================
+# Tuned Parameter Plots (mu, C_best, alpha)
+# =============================================================================
+
+def plot_tuned_parameters(
+    results, k_vector, params, pipeline="logistic", dataset="p1000",
+    aggregate="median", log_y=False, save_path=None
+):
+    """Faceted boxplots showing tuned hyperparameters across k values.
+
+    Parameters
+    ----------
+    results : dict
+        Pipeline output: {seed: {k: {method: {metric: [values]}}}}.
+    k_vector : list of int
+    params : list of str
+        Metric keys to plot, e.g. ["mu", "C_best"] or ["alpha"].
+    pipeline, dataset : str
+    aggregate : {"raw", "mean", "median"}
+    log_y : bool
+        If True, use log10 scale on y-axis.
+    save_path : str or None
+    """
+    param_labels = {
+        "mu": "\u03bc (Coreset Imbalance)",
+        "C_best": "C (Log. Reg. Regularization)",
+        "alpha": "\u03b1 (Lasso Penalty)",
+    }
+
+    valid_k = [k for k in k_vector
+               if all(k in results[s] for s in results)]
+
+    rows = []
+    for seed in results:
+        for k in valid_k:
+            for method, metrics in results[seed][k].items():
+                for param in params:
+                    if param not in metrics:
+                        continue
+                    values = np.asarray(metrics[param], dtype=float)
+                    # Remove NaN (aborted reps)
+                    values = values[~np.isnan(values)]
+                    if len(values) == 0:
+                        continue
+
+                    label = param_labels.get(param, param)
+
+                    if aggregate == "raw":
+                        for val in values:
+                            rows.append({
+                                "Seed": seed, "k": k, "Method": method,
+                                "Param": label, "Value": val
+                            })
+                    elif aggregate == "mean":
+                        rows.append({
+                            "Seed": seed, "k": k, "Method": method,
+                            "Param": label, "Value": float(np.mean(values))
+                        })
+                    elif aggregate == "median":
+                        rows.append({
+                            "Seed": seed, "k": k, "Method": method,
+                            "Param": label, "Value": float(np.median(values))
+                        })
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        print("No parameter data to plot.")
+        return
+
+    # Enforce facet order
+    facet_order = [param_labels.get(p, p) for p in params]
+    df["Param"] = pd.Categorical(df["Param"], categories=facet_order, ordered=True)
+
+    df_plot = _build_x_order(df)
+
+    p = (
+        ggplot(df_plot, aes(x="x_label", y="Value", fill="Method"))
+        + geom_boxplot(width=0.4)
+        + facet_wrap("~Param", ncol=1, scales="free_y")
+        + _standard_theme()
+        + theme(figure_size=(25, 6 * len(params)))
+        + labs(x="Method | k", y="Parameter Value")
+    )
+
+    if log_y:
+        from plotnine import scale_y_log10
+        p = p + scale_y_log10()
+
+    _save_plot(p, save_path, f"results_{pipeline}_tuned_params_{dataset}.pdf")
+    display(p)
+
+
+# =============================================================================
 # Score Distribution Plots
 # =============================================================================
 

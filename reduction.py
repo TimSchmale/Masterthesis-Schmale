@@ -193,9 +193,12 @@ def row_reduction_leverage(C, y, k):
     safe_probs = np.maximum(scaled_probs[sampled], 1e-10)
     D_inv = 1.0 / np.sqrt(safe_probs)
 
-    # Row rescaling applied to C only, y is subsetted without rescaling.
+    # Row reduction rescales both C and y with the same 1/sqrt(p_i) factors.
+    # This ensures the sketched OLS objective S(Cβ - y) = SCβ - Sy is preserved,
+    # yielding an unbiased estimator of the full-data solution.
+    # At evaluation, raw (unscaled) test data is used with the resulting β̂.
     R = C[sampled, :] * D_inv[:, None]
-    y_reduced = y[sampled]
+    y_reduced = y[sampled] * D_inv
 
     return {
         "R": R,

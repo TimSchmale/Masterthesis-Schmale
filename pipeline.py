@@ -576,7 +576,8 @@ def run_logistic_experiment(
 
                     reductions_log[method][i] = {
                         "X_red": X_red, "y_red": y_red,
-                        "sel_cols": sel_cols, "time_red": time_red
+                        "sel_cols": sel_cols, "time_red": time_red,
+                        "mu": mu
                     }
 
                     if X_red.shape[1] > X_red.shape[0]:
@@ -590,7 +591,8 @@ def run_logistic_experiment(
             for method in ("LS", "CLS", "RS", "CS"):
                 metrics = {"brier_test": [], "ce_test": [],
                            "time_model": [], "time_reduction": [],
-                           "time_scores": [], "selected_columns": []}
+                           "time_scores": [], "selected_columns": [],
+                           "mu": [], "C_best": []}
 
                 for i in range(reps):
                     red = reductions_log[method][i]
@@ -606,6 +608,8 @@ def run_logistic_experiment(
                         metrics["time_reduction"].append(time_red)
                         metrics["time_scores"].append(cached_timings[k][method][i])
                         metrics["selected_columns"].append(sel_cols)
+                        metrics["mu"].append(red["mu"])
+                        metrics["C_best"].append(np.nan)
                         continue
 
                     # Modeling (time_model = only model.fit via internal timing)
@@ -618,6 +622,8 @@ def run_logistic_experiment(
                     metrics["time_reduction"].append(time_red)
                     metrics["time_scores"].append(cached_timings[k][method][i])
                     metrics["selected_columns"].append(sel_cols)
+                    metrics["mu"].append(red["mu"])
+                    metrics["C_best"].append(result["C_best"])
 
                 method_results[method] = metrics
 
