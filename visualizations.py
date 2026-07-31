@@ -218,6 +218,10 @@ def plot_loss_boxplots(
 
     if log_y:
         p = p + scale_y_log10()
+    elif metric.startswith("rmse"):
+        from plotnine import scale_y_continuous
+        from mizani.breaks import breaks_width
+        p = p + scale_y_continuous(breaks=breaks_width(5))
 
     _save_plot(p, save_path, f"results_{pipeline}_{metric}_{dataset}.pdf")
     display(p)
