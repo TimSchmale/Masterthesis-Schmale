@@ -143,10 +143,10 @@ def plot_loss_boxplots(
                 if metric == "time_total":
                     t_scores = np.asarray(metrics.get("time_scores", [0.0] * len(next(iter(metrics.values())))))
                     t_reduction = np.asarray(metrics.get("time_reduction", [0.0] * len(t_scores)))
-                    if "time_fit" in metrics:
-                        t_model = np.asarray(metrics["time_fit"])
-                    elif "time_model" in metrics:
+                    if "time_model" in metrics:
                         t_model = np.asarray(metrics["time_model"])
+                    elif "time_fit" in metrics:
+                        t_model = np.asarray(metrics["time_fit"])
                     else:
                         continue
                     values = t_scores + t_reduction + t_model
@@ -317,12 +317,12 @@ def plot_time_decomposition(
         "time_scores": "Score Computation",
         "time_reduction": "Reduction",
     }
-    # Detect model time key (Lasso uses time_fit, OLS/Logistic use time_model)
+    # Detect model time key (prefer time_model, fall back to time_fit for old pickles)
     sample_method = next(iter(next(iter(next(iter(results.values())).values())).values()))
-    if "time_fit" in sample_method:
-        time_components["time_fit"] = "Model Fit"
-    elif "time_model" in sample_method:
+    if "time_model" in sample_method:
         time_components["time_model"] = "Model Fit"
+    elif "time_fit" in sample_method:
+        time_components["time_fit"] = "Model Fit"
 
     # Filter valid k
     valid_k = [k for k in k_vector
