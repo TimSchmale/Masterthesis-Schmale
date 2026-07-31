@@ -649,7 +649,8 @@ def _run_full_logistic(X_train_list, X_test_list, y_train_list, y_test_list,
                        base, data_folder, reps):
     """Oracle baseline: Logistic on true non-zero beta columns."""
     metrics = {"brier_test": [], "ce_test": [],
-               "time_model": [], "time_reduction": [], "time_scores": []}
+               "time_model": [], "time_reduction": [], "time_scores": [],
+               "mu": [], "C_best": []}
 
     for i in range(reps):
         beta = pd.read_csv(
@@ -668,6 +669,8 @@ def _run_full_logistic(X_train_list, X_test_list, y_train_list, y_test_list,
         metrics["time_model"].append(result["time_fit"])
         metrics["time_reduction"].append(0.0)
         metrics["time_scores"].append(0.0)
+        metrics["mu"].append(np.nan)  # no coreset for oracle
+        metrics["C_best"].append(result["C_best"])
 
     return metrics
 
