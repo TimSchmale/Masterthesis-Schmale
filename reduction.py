@@ -65,13 +65,13 @@ def column_reduction(X, scores, k):
         candidates = np.array([idx for idx in candidates if idx not in sampled])
         sampled = np.concatenate([sampled, candidates[:missing]]).astype(int)
 
-    # Rescaling (CUR expected algorithm, Drineas et al.): D_tt = 1/sqrt(c * p_j).
-    # Uses the uncapped c*p_j as per the theoretical framework.
+    # Rescaling (CUR expected algorithm, Drineas et al.): D_tt = 1/sqrt(min(1, c * p_j)).
+    # The sampling probability is capped at 1, and the same capped value is used
+    # in the rescaling denominator. This ensures E[C^T C] = X^T X (unbiasedness).
     # At test time, predictions use raw (unscaled) columns — this is intentional:
     # we treat CUR as a feature selection mechanism, not as a matrix approximation.
-    raw_probs = c * probs[sampled]  # uncapped c * p_j
-    raw_probs = np.maximum(raw_probs, 1e-10)  # numerical safety only
-    D_inv = 1.0 / np.sqrt(raw_probs)
+    safe_probs = np.maximum(scaled_probs[sampled], 1e-10)  # min(1, c * p_j)
+    D_inv = 1.0 / np.sqrt(safe_probs)
 
     C = X[:, sampled] * D_inv
 
@@ -189,13 +189,13 @@ def row_reduction_leverage(C, y, k):
         order = np.array([idx for idx in order if idx not in sampled])
         sampled = np.concatenate([sampled, order[:missing]]).astype(int)
 
-    # Rescaling (CUR expected algorithm, Drineas et al.): D_tt = 1/sqrt(r * q_i).
-    # Uses the uncapped r*q_i as per the theoretical framework.
-    raw_probs = r * probs[sampled]  # uncapped r * q_i
-    raw_probs = np.maximum(raw_probs, 1e-10)  # numerical safety only
-    D_inv = 1.0 / np.sqrt(raw_probs)
+    # Rescaling (CUR expected algorithm, Drineas et al.): D_tt = 1/sqrt(min(1, r * q_i)).
+    # The sampling probability is capped at 1, and the same capped value is used
+    # in the rescaling denominator. This ensures E[R^T R] = C^T C (unbiasedness).
+    safe_probs = np.maximum(scaled_probs[sampled], 1e-10)  # min(1, r * q_i)
+    D_inv = 1.0 / np.sqrt(safe_probs)
 
-    # Row reduction rescales both C and y with the same 1/sqrt(r * q_i) factors.
+    # Row reduction rescales both C and y with the same 1/sqrt(min(1, r*q_i)) factors.
     # This ensures the sketched OLS objective S(Cβ - y) = SCβ - Sy is preserved,
     # yielding an unbiased estimator of the full-data solution.
     # At evaluation, raw (unscaled) test data is used with the resulting β̂.
