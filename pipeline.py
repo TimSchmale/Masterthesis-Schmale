@@ -819,10 +819,10 @@ def run_lasso_experiment(
                 metrics_binary["coef"].append(res_binary["coef"])
 
                 # --- Variant 3: CLS Column Reduction + Lasso ---
-                # Own CLS scores with rank_reduce=False (full rank)
+                # CLS scores computed on the SKETCH (consistent with Row→Col)
                 t0_scores = time.perf_counter()
                 scores_cls = np.abs(get_cross_leverage_scores(
-                    X_train_list[i], y_train_list[i], k, rank_reduce=False
+                    R, y_sk, k, rank_reduce=False
                 ))
                 time_cls_scores = time.perf_counter() - t0_scores
 
