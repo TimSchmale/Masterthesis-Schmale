@@ -18,11 +18,9 @@ venv/
 
 # Data
 Simulation Data/
-Results/
-Paper
+Paper/
 
 # Large files
-*.pkl
 *.csv
 *.zip
 *.gz
