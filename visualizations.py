@@ -551,7 +551,7 @@ def plot_n_selected(screening_df, pipeline="col_row", dataset="p1000",
         + geom_boxplot(width=0.4)
         + _standard_theme()
         + theme(figure_size=(25, 10))
-        + labs(x="Method | k", y="Number of Selected Features")
+        + labs(x="Method | k", y="Number of selected Columns")
     )
 
     _save_plot(p, save_path, f"results_{pipeline}_n_selected_{dataset}.pdf")
