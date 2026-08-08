@@ -185,7 +185,8 @@ def fit_lasso(X_train, y_train, X_test, y_test, k,
     }
 
 
-def fit_logistic(X_train, y_train, X_test, y_test, selected_columns=None):
+def fit_logistic(X_train, y_train, X_test, y_test, selected_columns=None,
+                 sample_weight=None):
     """Fit logistic regression with CV-tuned regularization on (reduced) data.
 
     Uses 5-fold cross-validation to select the best regularization
@@ -205,6 +206,10 @@ def fit_logistic(X_train, y_train, X_test, y_test, selected_columns=None):
         Binary test response.
     selected_columns : list of int, optional
         Column indices for subsetting X_test.
+    sample_weight : ndarray of shape (n_train,), optional
+        Horvitz-Thompson weights from coreset sampling.
+        If provided, used in model.fit() to correct for
+        non-uniform sampling probabilities.
 
     Returns
     -------
@@ -228,7 +233,7 @@ def fit_logistic(X_train, y_train, X_test, y_test, selected_columns=None):
 
     # Timed: fit includes CV search — this is the full model selection cost
     t0 = time.perf_counter()
-    model.fit(X_train, y_train)
+    model.fit(X_train, y_train, sample_weight=sample_weight)
     time_fit = time.perf_counter() - t0
 
     # Train probabilities

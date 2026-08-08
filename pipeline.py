@@ -575,6 +575,7 @@ def run_logistic_experiment(
 
                     reductions_log[method][i] = {
                         "X_red": X_red, "y_red": y_red,
+                        "weights": row_res["weights"],
                         "sel_cols": sel_cols, "time_red": time_red,
                         "mu": mu
                     }
@@ -596,7 +597,8 @@ def run_logistic_experiment(
 
                     # Modeling (time_model = only model.fit via internal timing)
                     result = fit_logistic(X_red, y_red, X_test_list[i], y_test_list[i],
-                                          selected_columns=sel_cols)
+                                          selected_columns=sel_cols,
+                                          sample_weight=red["weights"])
 
                     metrics["brier_test"].append(result["brier_test"])
                     metrics["ce_test"].append(result["ce_test"])
@@ -739,6 +741,12 @@ def run_lasso_experiment(
             X_test_list.append(X_te)
             y_train_list.append(y_tr)
             y_test_list.append(y_te)
+
+        # Compute scores on TRAINING data for this seed
+        print(f"  Computing scores on training data...")
+        cached_scores, cached_timings = compute_scores_cached(
+            X_train_list, y_train_list, k_vector
+        )
 
         seed_results = {}
 

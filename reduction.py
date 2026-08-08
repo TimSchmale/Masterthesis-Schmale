@@ -307,9 +307,14 @@ def row_reduction_coreset(C, y, mu, k):
     # Weighted sampling without replacement (uses global np.random state for reproducibility)
     sampled = np.random.choice(n, size=r, replace=False, p=probs)
 
+    # Horvitz-Thompson weights: w_i = 1/(r * p_i)
+    # Ensures weighted subsample loss approximates full loss
+    weights = 1.0 / (r * probs[sampled])
+
     return {
         "R": C[sampled, :],
         "y": y_arr[sampled],
+        "weights": weights,
         "selected_rows": sampled.tolist(),
         "mu": mu,
         "r": r
