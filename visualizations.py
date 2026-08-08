@@ -458,11 +458,21 @@ def plot_tuned_parameters(
             for method, metrics in results[seed][k].items():
                 if method == "Full":
                     continue
+                # Abort mask: exclude reps where model fit was aborted
+                if "time_model" in metrics:
+                    valid_mask = ~np.isnan(np.asarray(metrics["time_model"]))
+                elif "time_fit" in metrics:
+                    valid_mask = ~np.isnan(np.asarray(metrics["time_fit"]))
+                else:
+                    valid_mask = None
+
                 for param in params:
                     if param not in metrics:
                         continue
                     values = np.asarray(metrics[param], dtype=float)
-                    # Remove NaN (aborted reps)
+                    # Apply abort mask, then remove remaining NaN
+                    if valid_mask is not None:
+                        values = values[valid_mask]
                     values = values[~np.isnan(values)]
                     # Convert C to λ = 1/C
                     if param == "C_best":

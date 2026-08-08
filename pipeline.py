@@ -553,9 +553,8 @@ def run_logistic_experiment(
         for k in k_vector:
             method_results = {}
 
-            # Phase 1: Compute all reductions and identify abort reps
+            # Phase 1: Compute all reductions
             reductions_log = {}
-            abort_reps_log = set()
 
             for method in ("LS", "CLS", "RS", "CS"):
                 reductions_log[method] = {}
@@ -580,14 +579,8 @@ def run_logistic_experiment(
                         "mu": mu
                     }
 
-                    if X_red.shape[1] > X_red.shape[0]:
-                        abort_reps_log.add(i)
-
-            if abort_reps_log:
-                print(f"  [INFO] k={k}: Reps {sorted(abort_reps_log)} aborted "
-                      f"(underdetermined for >=1 method). Skipping ALL methods.")
-
-            # Phase 2: Modeling (skip abort_reps for ALL methods)
+            # Phase 2: Modeling (no abort needed — L2 regularization
+            # guarantees a unique solution even when p > n)
             for method in ("LS", "CLS", "RS", "CS"):
                 metrics = {"brier_test": [], "ce_test": [],
                            "time_model": [], "time_reduction": [],
@@ -600,17 +593,6 @@ def run_logistic_experiment(
                     y_red = red["y_red"]
                     sel_cols = red["sel_cols"]
                     time_red = red["time_red"]
-
-                    if i in abort_reps_log:
-                        metrics["brier_test"].append(np.nan)
-                        metrics["ce_test"].append(np.nan)
-                        metrics["time_model"].append(np.nan)
-                        metrics["time_reduction"].append(time_red)
-                        metrics["time_scores"].append(cached_timings[k][method][i])
-                        metrics["selected_columns"].append(sel_cols)
-                        metrics["mu"].append(red["mu"])
-                        metrics["C_best"].append(np.nan)
-                        continue
 
                     # Modeling (time_model = only model.fit via internal timing)
                     result = fit_logistic(X_red, y_red, X_test_list[i], y_test_list[i],
