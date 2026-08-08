@@ -20,6 +20,24 @@ from plotnine import (
 
 
 # =============================================================================
+# Label Mapping
+# =============================================================================
+
+METHOD_LABELS = {
+    "CLS": "Cross-Leverage Scores",
+    "CS": "Combined Scores",
+    "LS": "Leverage Scores",
+    "RS": "Random Scores",
+}
+
+
+def _rename_methods(df, col="Method"):
+    """Rename method abbreviations to full display names."""
+    df[col] = df[col].replace(METHOD_LABELS)
+    return df
+
+
+# =============================================================================
 # Shared Helpers
 # =============================================================================
 
@@ -55,6 +73,9 @@ def _build_x_order(df):
         df_plot["x_label"], categories=x_order, ordered=True
     )
     df_plot = df_plot.sort_values("x_label")
+
+    # Rename Method after x_label is built (affects fill legend only, not x-axis)
+    df_plot = _rename_methods(df_plot)
 
     return df_plot
 
@@ -125,6 +146,9 @@ def plot_loss_boxplots(
     for seed in results:
         for k in valid_k:
             for method, metrics in results[seed][k].items():
+                # Exclude Full model from time plots
+                if method == "Full" and metric.startswith("time"):
+                    continue
 
                 # Abort mask: for time metrics, exclude reps where model fit
                 # was aborted (time_model = NaN). Non-time metrics handle
@@ -332,6 +356,8 @@ def plot_time_decomposition(
     for seed in results:
         for k in valid_k:
             for method, metrics in results[seed][k].items():
+                if method == "Full":
+                    continue
                 # Abort mask: exclude reps where time_model is NaN (soft abort)
                 if "time_model" in metrics:
                     valid_mask = ~np.isnan(np.asarray(metrics["time_model"]))
@@ -417,7 +443,7 @@ def plot_tuned_parameters(
     param_labels = {
         "mu": "\u03bc (Coreset Imbalance)",
         "C_best": "C (Log. Reg. Regularization)",
-        "alpha": "\u03b1 (Lasso Penalty)",
+        "alpha": "\u03bb",
     }
 
     valid_k = [k for k in k_vector
@@ -427,6 +453,8 @@ def plot_tuned_parameters(
     for seed in results:
         for k in valid_k:
             for method, metrics in results[seed][k].items():
+                if method == "Full":
+                    continue
                 for param in params:
                     if param not in metrics:
                         continue
@@ -521,7 +549,7 @@ def plot_score_distributions(scores_single, pipeline=None, dataset=None,
             save_path,
             f"results_{pipeline}_scores_{dataset}.pdf"
         )
-        p.save(file_path, height=3, width=8)
+        p.save(file_path, height=2.8, width=8)
         print(f"Saved: {file_path}")
 
     display(p)
@@ -551,7 +579,7 @@ def plot_n_selected(screening_df, pipeline="col_row", dataset="p1000",
         + geom_boxplot(width=0.4)
         + _standard_theme()
         + theme(figure_size=(25, 10))
-        + labs(x="Method | k", y="Number of selected Columns")
+        + labs(x="Method | k", y="Number of selected Covariates")
     )
 
     _save_plot(p, save_path, f"results_{pipeline}_n_selected_{dataset}.pdf")
