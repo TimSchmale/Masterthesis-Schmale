@@ -444,8 +444,8 @@ def plot_tuned_parameters(
     save_path : str or None
     """
     param_labels = {
-        "mu": "\u03bc (Coreset Imbalance)",
-        "C_best": "C (Log. Reg. Regularization)",
+        "mu": "\u03bc",
+        "C_best": "\u03bb",
         "alpha": "\u03bb",
     }
 
@@ -464,6 +464,9 @@ def plot_tuned_parameters(
                     values = np.asarray(metrics[param], dtype=float)
                     # Remove NaN (aborted reps)
                     values = values[~np.isnan(values)]
+                    # Convert C to λ = 1/C
+                    if param == "C_best":
+                        values = 1.0 / values
                     if len(values) == 0:
                         continue
 
@@ -497,14 +500,26 @@ def plot_tuned_parameters(
 
     df_plot = _build_x_order(df)
 
-    p = (
-        ggplot(df_plot, aes(x="x_label", y="Value", fill="Method"))
-        + geom_boxplot(width=0.4)
-        + facet_wrap("~Param", ncol=1, scales="free_y")
-        + _standard_theme()
-        + theme(figure_size=(25, 6 * len(params)))
-        + labs(x="Method | k", y="Parameter Value")
-    )
+    # Single param: no facet, use param label as y-axis
+    # Multiple params: facet as before
+    if len(params) == 1:
+        y_label = param_labels.get(params[0], params[0])
+        p = (
+            ggplot(df_plot, aes(x="x_label", y="Value", fill="Method"))
+            + geom_boxplot(width=0.4)
+            + _standard_theme()
+            + theme(figure_size=(25, 10))
+            + labs(x="Method | k", y=y_label)
+        )
+    else:
+        p = (
+            ggplot(df_plot, aes(x="x_label", y="Value", fill="Method"))
+            + geom_boxplot(width=0.4)
+            + facet_wrap("~Param", ncol=1, scales="free_y")
+            + _standard_theme()
+            + theme(figure_size=(25, 6 * len(params)))
+            + labs(x="Method | k", y="")
+        )
 
     if log_y:
         from plotnine import scale_y_log10
