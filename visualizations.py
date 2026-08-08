@@ -28,6 +28,9 @@ METHOD_LABELS = {
     "CS": "Combined Scores",
     "LS": "Leverage Scores",
     "RS": "Random Scores",
+    "Practical": "Practical LASSO",
+    "Hybrid": "Hybrid LASSO",
+    "Theoretical": "Theoretical LASSO",
 }
 
 
