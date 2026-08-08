@@ -740,12 +740,6 @@ def run_lasso_experiment(
             y_train_list.append(y_tr)
             y_test_list.append(y_te)
 
-        # Compute scores on TRAINING data for this seed
-        print(f"  Computing scores on training data...")
-        cached_scores, cached_timings = compute_scores_cached(
-            X_train_list, y_train_list, k_vector
-        )
-
         seed_results = {}
 
         for k in k_vector:

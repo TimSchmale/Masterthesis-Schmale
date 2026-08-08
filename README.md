@@ -1,116 +1,99 @@
 # Regression for Large Matrices with Joint Column and Row Reduction
 
-Sampling-variance study for CUR-based dimensionality reduction applied to
-linear regression, logistic regression, and Lasso.
+Sampling-variance study for sequential reduction procedures targeting both
+sample size and dimensionality, applied to OLS, logistic regression, and
+Lasso.
 
-## Project Structure
+## Structure
 
 ```
-refactored/
-├── pipeline.py              # Experiment runners (5 pipelines)
-├── reduction.py             # Column & row reduction primitives
-├── scoring.py               # Column/row score computation (LS, CLS, RS, CS)
-├── modeling.py              # Model fitting (OLS, Logistic, Lasso)
-├── evaluation.py            # Screening metrics (TPR, FDR, MCC)
-├── visualizations.py        # Plotnine-based boxplots & histograms
-├── Masterthesis_Reduction   # Main notebook: runs all pipelines
-├── Masterthesis_Plots       # Plotting notebook: loads pickles & visualizes
-└── README.md
+pipeline.py              Experiment runners (one function per pipeline)
+reduction.py             Column & row reduction primitives
+scoring.py               Score computation (LS, CLS, RS, CS)
+modeling.py              Model fitting (OLS, Logistic, Lasso)
+evaluation.py            Screening metrics (TPR, FDR, MCC)
+visualizations.py        Plotnine plots
+
+Masterthesis_Reduction   Runs all pipelines
+Masterthesis_Plots       Loads pickles, produces all figures
+Simulation               Generates synthetic data
+
+Results/                 Per-seed pickle files
+plots/                   Saved PDFs
 ```
 
 ## Pipelines
 
-| # | Pipeline | Function | Order | Model |
-|---|----------|----------|-------|-------|
-| 1 | OLS Column→Row | `run_ols_experiment(..., order="column_first")` | Column reduction → Row reduction (leverage) → OLS | OLS |
-| 2 | OLS Column Only | `run_ols_experiment(..., order="column_only")` | Column reduction → OLS (no row reduction) | OLS |
-| 3 | OLS Row→Column | `run_ols_experiment(..., order="row_first")` | Rademacher sketch → Column reduction → OLS | OLS |
-| 4 | Logistic | `run_logistic_experiment(...)` | Column reduction → Coreset row reduction → Logistic | Logistic Reg. |
-| 5 | Lasso (3 variants) | `run_lasso_experiment(...)` | Sketch → Lasso (theo/binary/CLS+Lasso) | Lasso |
+| # | Name | Reduction | Model |
+|---|------|-----------|-------|
+| 1 | Column→Row | Column selection → Leverage row sampling | OLS |
+| 2 | Column Only | Column selection (no row reduction) | OLS |
+| 3 | Row→Column | Rademacher sketch → Column selection on sketch | OLS |
+| 4 | Logistic | Column selection → Coreset row sampling | LogReg (L2) |
+| 5 | Lasso | Sketch → Lasso in 3 variants (see below) | Lasso |
 
-## Experimental Design
+**Lasso variants:**
+- *Theoretical*: λ = 1/√(2k), applied to full sketch
+- *Practical*: Binary-search λ, applied to full sketch
+- *Hybrid*: CLS scores on sketch → column reduction → Lasso with binary-search λ
 
-- **10 pre-generated datasets** (X1.csv…X10.csv) per simulation setting (p, n)
-- **10 outer seeds** (SEED_FROM=1…10): each seed produces a different 80/20 train/test split
-- **Per seed × dataset**:
-  - Pipelines 1, 2, 4: Scores on X_train → Reduction → Model → Evaluate on test set
-  - Pipeline 3 (Row→Col): Sketch X_train → Scores on Sketch → Column reduction on Sketch → Model → Evaluate on test set
-  - Pipeline 5 (Lasso): Sketch X_train → Lasso / (CLS Scores on X_train → Column reduction on Sketch → Lasso)
-- **Total**: 100 pipeline runs per (k, method) combination
+## Scoring Methods
 
-### Scoring Methods
-
-| Key | Method | Description |
-|-----|--------|-------------|
+| Key | Name | Idea |
+|-----|------|------|
 | LS | Leverage Scores | Column leverage from top-k right singular vectors |
-| CLS | Cross-Leverage Scores | Alignment between columns and response via augmented SVD |
-| RS | Random Scores | Uniform baseline (non-informative) |
-| CS | Combined Scores | Convex mix: 0.8·‖CLS‖ + 0.2·‖LS‖ |
+| CLS | Cross-Leverage Scores | Column–response alignment via augmented SVD |
+| RS | Random Scores | Uniform random (baseline) |
+| CS | Combined Scores | 0.8·|CLS| + 0.2·|LS| |
 
-## Reproducibility
+## Experimental Setup
 
-All random operations are seeded deterministically:
+10 pre-generated datasets × 10 seeds = 100 runs per (k, method).
+Each seed defines a fresh 80/20 train/test split.
 
-- `numpy_train_test_split(seed=seed)` — own RNG via `default_rng(seed)`
-- `np.random.seed(seed + 42)` — global state controls:
-  - Bernoulli sampling in `column_reduction` and `row_reduction_leverage`
-  - Rademacher sketch in `row_reduction_sketch`
-  - Coreset sampling in `row_reduction_coreset`
-  - `randomized_svd` (via `random_state=None` → global state)
-  - Random scores (`np.random.uniform`)
+Scores are computed on the training data (Pipelines 1, 2, 4) or on the
+sketch (Pipelines 3, 5). All random operations are seeded for full
+reproducibility — see `numpy_train_test_split` and `np.random.seed(seed + 42)`.
 
-Running the same configuration multiple times produces **identical results**.
+## Soft Abort (OLS Only)
 
-## Soft Abort Logic
+If a CUR reduction leaves more columns than rows (underdetermined), OLS has
+no unique solution. In that case the OLS pipelines mark the rep as aborted
+and write NaN for *all* methods at that rep (keeps sample sizes fair).
 
-When column+row reduction produces an underdetermined system (more columns
-than rows), the pipeline uses a **two-phase approach**:
-
-1. **Phase 1**: Compute reductions for ALL methods × ALL reps. If any
-   method produces an underdetermined system for rep `i`, mark `i` as aborted.
-2. **Phase 2**: Model fitting. Aborted reps get `NaN` for **all methods**
-   (ensures fair comparison with equal sample sizes).
+Not needed for Logistic/Lasso — regularization handles d > n.
 
 ## Configuration
 
 ```python
-# Paths
 BASE = "/path/to/Masterthesis/"
-DATA_FOLDER = "Simulation Data/p1000_n1000"  # p5000_n5000, p10000_n10000
-RESULTS_FOLDER = "Results/p1000"
+DATA_FOLDER = "Simulation Data/d1000_n1000"
+RESULTS_FOLDER = "Results/d1000"
 
-# Parameters
 k_vector = [10, 20, 25, 50, 100, 200, 300, 400, 500]
-REPS = 10          # number of datasets
-OUTER_REPS = 10    # number of seeds
+REPS = 10
+OUTER_REPS = 10
 TEST_SIZE = 0.2
 SEED_FROM = 1
 ```
 
 ## Output
 
-Results are saved as per-seed pickles:
-```
-Results/p1000/results_ols_col_row_seed_1.pkl
-Results/p1000/results_ols_col_row_seed_2.pkl
-...
-```
+Per-seed pickles: `Results/d1000/results_ols_col_row_seed_1.pkl`, etc.
 
 Structure: `{k: {method: {metric: [values_per_rep]}}}`
 
-## Visualization
+## Plots
 
-The `Masterthesis_Plots` notebook loads all pickles and generates:
-- Loss boxplots (RMSE, Brier, Cross-Entropy, Total Time)
-- Screening boxplots (TPR, FDR, MCC)
-- Score distribution histograms
-- Number of selected features
+`Masterthesis_Plots` generates:
+- Loss (RMSE, Brier, Cross-Entropy)
+- Time (total + decomposition into scoring, reduction, model fit)
+- Screening (TPR, FDR, MCC)
+- Tuned hyperparameters (μ, λ)
+- Score distributions, number of selected covariates
 
-Default aggregation: **median per seed** (10 points per boxplot).
-Override with `aggregate="raw"` for all 100 individual values.
+Aggregation: median across the 10 reps per seed (one point per seed per boxplot).
 
 ## Dependencies
 
-- numpy, pandas, scikit-learn
-- plotnine (visualization)
-- No Spark required — runs on single-node Python
+numpy, pandas, scikit-learn, plotnine.
