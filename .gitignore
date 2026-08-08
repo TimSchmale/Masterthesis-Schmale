@@ -19,6 +19,7 @@ venv/
 # Data
 Simulation Data/
 Paper/
+old code/
 
 # Large files
 *.csv
